@@ -1,0 +1,10 @@
+* text=auto eol=lf
+
+# Keep Windows-only artifacts as CRLF (none currently, but future-proofing)
+*.cmd  text eol=crlf
+*.bat  text eol=crlf
+*.ps1  text eol=crlf
+
+# Treat lockfiles as text but never auto-merge
+pnpm-lock.yaml -diff merge=binary
+package-lock.json -diff merge=binary

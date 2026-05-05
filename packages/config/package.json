@@ -1,0 +1,12 @@
+{
+  "name": "@platform/config",
+  "version": "0.0.0",
+  "private": true,
+  "files": [
+    "tsconfig.base.json",
+    "tsconfig.next.json",
+    "tsconfig.lib.json",
+    "tailwind.preset.cjs",
+    "eslint.base.js"
+  ]
+}

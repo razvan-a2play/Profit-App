@@ -1,0 +1,34 @@
+node_modules
+.pnpm-store
+
+# build outputs
+.next
+.turbo
+dist
+out
+*.tsbuildinfo
+
+# env
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# os / editor
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea
+.claude/
+
+# logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# coverage
+coverage
+*.lcov
