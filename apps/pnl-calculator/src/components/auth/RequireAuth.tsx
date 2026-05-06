@@ -38,17 +38,19 @@ const RequireAuth: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 
     if (hasAuthCallback) setAuthCallbackInFlight(true);
 
-    // If the URL has ?code=..., explicitly exchange it. Supabase's admin-sent
-    // magic links can use PKCE format even when the browser client is
-    // configured for implicit flow.
+    // Explicitly handle Supabase auth callbacks. We do this rather than
+    // relying on detectSessionInUrl because that has been racing with mount.
     if (typeof window !== "undefined") {
-      const code = new URLSearchParams(window.location.search).get("code");
-      if (code) {
-        supabase.auth.exchangeCodeForSession(code).catch(() => {
-          // If exchange fails (e.g., no verifier stored), fall through —
-          // INITIAL_SESSION will still fire with a null session and we'll
-          // surface the sign-in page.
-        });
+      const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+      const access_token = hashParams.get("access_token");
+      const refresh_token = hashParams.get("refresh_token");
+      if (access_token && refresh_token) {
+        supabase.auth.setSession({ access_token, refresh_token }).catch(() => {});
+      } else {
+        const code = new URLSearchParams(window.location.search).get("code");
+        if (code) {
+          supabase.auth.exchangeCodeForSession(code).catch(() => {});
+        }
       }
     }
 

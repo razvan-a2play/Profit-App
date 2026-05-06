@@ -69,16 +69,22 @@ const AuthPage: React.FC = () => {
           });
           return;
         }
-        // Strip the hash now that we've consumed it.
-        window.history.replaceState(
-          {},
-          document.title,
-          window.location.pathname + window.location.search
-        );
         if (type === 'recovery') {
+          // Strip the hash for the recovery flow (we stay on /auth to set the
+          // password, no navigation needed).
+          window.history.replaceState(
+            {},
+            document.title,
+            window.location.pathname + window.location.search
+          );
           setMode('set-password');
         } else {
-          router.replace(getReturnTarget());
+          // For magic-link / signup confirmation, do a full page navigation
+          // to /. This forces the browser to reload, the supabase cookies are
+          // sent with the request, and RequireAuth on / will see a valid
+          // session immediately. Avoids any Next.js client-router race.
+          const target = getReturnTarget();
+          window.location.replace(target.startsWith('/') ? target : '/');
         }
       });
       return;
@@ -96,10 +102,8 @@ const AuthPage: React.FC = () => {
           });
           return;
         }
-        const url = new URL(window.location.href);
-        url.searchParams.delete('code');
-        window.history.replaceState({}, document.title, url.toString());
-        router.replace(getReturnTarget());
+        const target = getReturnTarget();
+        window.location.replace(target.startsWith('/') ? target : '/');
       });
       return;
     }

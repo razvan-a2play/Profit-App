@@ -18,10 +18,13 @@ export function getSupabaseBrowserClient() {
   // request, which doesn't exist when an admin clicks "Send magic link" on
   // behalf of another user. Implicit puts the access_token in the URL hash
   // and is detected client-side without a verifier.
+  // detectSessionInUrl: false — the auto-detect was racing with component
+  // mount and silently failing in production. AuthPage parses the URL
+  // explicitly and calls setSession, which is more reliable.
   _client = createBrowserClient<Database>(url, key, {
     auth: {
       flowType: "implicit",
-      detectSessionInUrl: true,
+      detectSessionInUrl: false,
       persistSession: true,
       autoRefreshToken: true,
     },
