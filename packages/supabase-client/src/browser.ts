@@ -12,6 +12,19 @@ export function getSupabaseBrowserClient() {
       "Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY env var"
     );
   }
-  _client = createBrowserClient<Database>(url, key);
+  // Use implicit flow so admin-initiated magic links + password-recovery
+  // emails (sent from Supabase Studio) work. PKCE — the default — requires a
+  // code_verifier stored in the same browser that originated the auth
+  // request, which doesn't exist when an admin clicks "Send magic link" on
+  // behalf of another user. Implicit puts the access_token in the URL hash
+  // and is detected client-side without a verifier.
+  _client = createBrowserClient<Database>(url, key, {
+    auth: {
+      flowType: "implicit",
+      detectSessionInUrl: true,
+      persistSession: true,
+      autoRefreshToken: true,
+    },
+  });
   return _client;
 }
