@@ -9,10 +9,13 @@ import { Input } from "@platform/ui";
 import { Button } from "@platform/ui";
 import { Label } from "@platform/ui";
 
+type AuthMode = 'signin' | 'signup' | 'forgot-password' | 'set-password';
+
 const AuthPage: React.FC = () => {
-  const [mode, setMode] = useState<'signin' | 'signup' | 'forgot-password'>('signin');
+  const [mode, setMode] = useState<AuthMode>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
   const router = useRouter();
@@ -28,28 +31,48 @@ const AuthPage: React.FC = () => {
   };
 
   useEffect(() => {
-    const titles = {
+    const titles: Record<AuthMode, string> = {
       'signin': 'Sign in • Calculator Access',
       'signup': 'Create account • Calculator Access',
-      'forgot-password': 'Reset password • Calculator Access'
+      'forgot-password': 'Reset password • Calculator Access',
+      'set-password': 'Choose a new password • Calculator Access',
     };
     document.title = titles[mode];
   }, [mode]);
 
-  // Redirect if already authenticated (e.g., after email confirmation)
+  // Redirect if already authenticated. Skip while we're in the middle of a
+  // password-recovery flow — the recovery token signs the user in, but we
+  // need to keep them on /auth so they can finish setting a new password.
   useEffect(() => {
     let cancelled = false;
     supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!cancelled && session) router.replace(getReturnTarget());
+      if (cancelled || !session) return;
+      const hash = typeof window !== 'undefined' ? window.location.hash : '';
+      const isRecovery = hash.includes('type=recovery') || mode === 'set-password';
+      if (!isRecovery) router.replace(getReturnTarget());
     });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Listen for auth state changes to redirect on sign in
+  // Listen for auth state changes:
+  // - PASSWORD_RECOVERY → user clicked the recovery email, show set-password form
+  // - SIGNED_IN (any other path, e.g. magic link) → redirect into the app
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_IN' && session) router.replace(getReturnTarget());
+      if (event === 'PASSWORD_RECOVERY') {
+        setMode('set-password');
+        return;
+      }
+      if (event === 'SIGNED_IN' && session) {
+        // Only auto-redirect if we're NOT in the password-set flow.
+        // Recovery links also fire SIGNED_IN, but PASSWORD_RECOVERY arrives first.
+        setMode((current) => {
+          if (current === 'set-password') return current;
+          router.replace(getReturnTarget());
+          return current;
+        });
+      }
     });
     return () => subscription.unsubscribe();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -99,7 +122,6 @@ const AuthPage: React.FC = () => {
     e.preventDefault();
     setLoading(true);
     try {
-      // emailRedirectTo legitimately needs the full origin — Supabase emails it back as a link.
       const redirectUrl = `${window.location.origin}/`;
       const { error } = await supabase.auth.signUp({
         email,
@@ -140,30 +162,111 @@ const AuthPage: React.FC = () => {
     }
   };
 
+  const handleSetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (password.length < 8) {
+      toast({ title: 'Password too short', description: 'Use at least 8 characters.', variant: 'destructive' });
+      return;
+    }
+    if (password !== confirmPassword) {
+      toast({ title: 'Passwords don’t match', description: 'Please re-enter the same password in both fields.', variant: 'destructive' });
+      return;
+    }
+    setLoading(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ password });
+      if (error) throw error;
+      toast({ title: 'Password updated', description: 'Welcome back — redirecting you in.' });
+      // Clear the recovery hash from the URL so a refresh doesn't re-trigger.
+      if (typeof window !== 'undefined' && window.location.hash) {
+        window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
+      }
+      router.replace(getReturnTarget());
+    } catch (err: any) {
+      toast({ title: 'Could not update password', description: err.message || 'Please try again.', variant: 'destructive' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const onSubmit =
+    mode === 'signin' ? handleSignIn :
+    mode === 'signup' ? handleSignUp :
+    mode === 'forgot-password' ? handleForgotPassword :
+    handleSetPassword;
+
+  const submitLabel =
+    loading ? 'Please wait…' :
+    mode === 'signin' ? 'Sign In' :
+    mode === 'signup' ? 'Sign Up' :
+    mode === 'forgot-password' ? 'Send Reset Link' :
+    'Set Password';
+
+  const headerLabel =
+    mode === 'signin' ? 'Sign in to access the calculator' :
+    mode === 'signup' ? 'Create an account' :
+    mode === 'forgot-password' ? 'Reset your password' :
+    'Choose a new password';
+
   return (
     <main className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-light via-background to-accent-light p-4">
       <Card className="w-full max-w-md shadow-card">
         <CardHeader>
-          <CardTitle className="text-center">
-            {mode === 'signin' ? 'Sign in to access the calculator' : mode === 'signup' ? 'Create an account' : 'Reset your password'}
-          </CardTitle>
+          <CardTitle className="text-center">{headerLabel}</CardTitle>
         </CardHeader>
         <CardContent>
-          <form onSubmit={mode === 'signin' ? handleSignIn : mode === 'signup' ? handleSignUp : handleForgotPassword} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
-              <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
-            </div>
-            {mode !== 'forgot-password' && (
+          <form onSubmit={onSubmit} className="space-y-4">
+            {/* Email field — hidden in set-password mode (we already know who you are) */}
+            {mode !== 'set-password' && (
               <div className="space-y-2">
-                <Label htmlFor="password">Password</Label>
-                <Input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+                <Label htmlFor="email">Email</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                />
               </div>
             )}
+
+            {/* Password field — shown for signin / signup / set-password */}
+            {(mode === 'signin' || mode === 'signup' || mode === 'set-password') && (
+              <div className="space-y-2">
+                <Label htmlFor="password">
+                  {mode === 'set-password' ? 'New password' : 'Password'}
+                </Label>
+                <Input
+                  id="password"
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
+                  required
+                />
+              </div>
+            )}
+
+            {/* Confirm password — only in set-password mode */}
+            {mode === 'set-password' && (
+              <div className="space-y-2">
+                <Label htmlFor="confirm-password">Confirm new password</Label>
+                <Input
+                  id="confirm-password"
+                  type="password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  autoComplete="new-password"
+                  required
+                />
+              </div>
+            )}
+
             <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? 'Please wait…' : mode === 'signin' ? 'Sign In' : mode === 'signup' ? 'Sign Up' : 'Send Reset Link'}
+              {submitLabel}
             </Button>
           </form>
+
           <div className="text-center text-sm text-muted-foreground mt-4 space-y-2">
             {mode === 'signin' && (
               <>
@@ -176,6 +279,9 @@ const AuthPage: React.FC = () => {
             )}
             {mode === 'forgot-password' && (
               <button type="button" className="underline" onClick={() => setMode('signin')}>Back to sign in</button>
+            )}
+            {mode === 'set-password' && (
+              <p className="text-xs">Pick a password you&rsquo;ll remember. After setting it you&rsquo;ll be signed in automatically.</p>
             )}
           </div>
         </CardContent>
