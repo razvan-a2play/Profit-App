@@ -22,18 +22,57 @@ const RequireAuth: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [retryNonce, setRetryNonce] = useState(0);
 
   useEffect(() => {
+    let resolved = false;
+
+    // If the URL contains a Supabase auth hash (magic link / recovery / signup
+    // confirmation), do NOT redirect to /auth before Supabase has a chance to
+    // process it — that would drop the hash mid-flight. Wait for the client's
+    // INITIAL_SESSION event, which fires once URL processing is done.
+    const hasAuthHash =
+      typeof window !== "undefined" &&
+      /access_token=|refresh_token=|type=(magiclink|recovery|signup|invite)/.test(
+        window.location.hash
+      );
+
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    } = supabase.auth.onAuthStateChange((event, nextSession) => {
       setSession(nextSession);
+      if (event === "INITIAL_SESSION") {
+        resolved = true;
+        setCheckingAuth(false);
+        // Strip the auth fragment now that we've consumed it so a refresh
+        // doesn't re-trigger the flow.
+        if (
+          hasAuthHash &&
+          typeof window !== "undefined" &&
+          window.location.hash
+        ) {
+          window.history.replaceState(
+            {},
+            document.title,
+            window.location.pathname + window.location.search
+          );
+        }
+      }
     });
 
-    supabase.auth.getSession().then(({ data: { session: current } }) => {
-      setSession(current);
-      setCheckingAuth(false);
-    });
+    // Belt-and-suspenders fallback: if INITIAL_SESSION never arrives (older
+    // supabase versions, weird timing), fall back to a direct getSession.
+    const fallback = setTimeout(() => {
+      if (resolved) return;
+      supabase.auth.getSession().then(({ data: { session: current } }) => {
+        if (resolved) return;
+        resolved = true;
+        setSession(current);
+        setCheckingAuth(false);
+      });
+    }, 1500);
 
-    return () => subscription.unsubscribe();
+    return () => {
+      clearTimeout(fallback);
+      subscription.unsubscribe();
+    };
   }, []);
 
   // Run the allowlist check whenever we have a session
