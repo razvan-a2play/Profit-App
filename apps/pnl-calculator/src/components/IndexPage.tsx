@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@platform/ui";
 import { AlertDialog, AlertDialogAction, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@platform/ui";
 import ProductCard from './ProductCard';
 import FloatingCalculationDatabase from './FloatingCalculationDatabase';
+import { UserMenu } from './UserMenu';
 
 import type { Product, AdditionalCost, SavedVersion } from '@/types/product';
 import { useToast } from "@platform/ui";
@@ -438,6 +439,10 @@ const Index: React.FC = () => {
   return (
     <div className="min-h-screen bg-gradient-to-br from-primary-light via-background to-accent-light p-4 md:p-6">
       <div className="max-w-7xl mx-auto">
+        {/* Top bar with user menu */}
+        <div className="flex justify-end mb-2">
+          <UserMenu />
+        </div>
         {/* Header */}
         <div className="text-center mb-10 animate-enter">
           <div className="flex items-center justify-center mb-6">
