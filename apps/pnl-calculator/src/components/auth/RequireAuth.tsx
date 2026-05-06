@@ -21,44 +21,75 @@ const RequireAuth: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [allowlist, setAllowlist] = useState<AllowlistState>({ kind: "idle" });
   const [retryNonce, setRetryNonce] = useState(0);
 
+  // True while we believe the URL is mid-auth (magic link / recovery / etc.)
+  // Used for the loading UI so the user doesn't see a flash of "Sign In".
+  const [authCallbackInFlight, setAuthCallbackInFlight] = useState(false);
+
   useEffect(() => {
     let resolved = false;
 
-    // If the URL contains a Supabase auth hash (magic link / recovery / signup
-    // confirmation), do NOT redirect to /auth before Supabase has a chance to
-    // process it — that would drop the hash mid-flight. Wait for the client's
-    // INITIAL_SESSION event, which fires once URL processing is done.
-    const hasAuthHash =
-      typeof window !== "undefined" &&
-      /access_token=|refresh_token=|type=(magiclink|recovery|signup|invite)/.test(
-        window.location.hash
-      );
+    // Detect any Supabase auth callback markers in the URL — both hash-based
+    // (implicit flow: #access_token=...) and query-based (PKCE: ?code=...).
+    const hash = typeof window !== "undefined" ? window.location.hash : "";
+    const search = typeof window !== "undefined" ? window.location.search : "";
+    const hasAuthCallback =
+      /access_token=|refresh_token=|type=(magiclink|recovery|signup|invite)|error=/.test(hash) ||
+      /[?&](code|token_hash|error|error_description)=/.test(search);
+
+    if (hasAuthCallback) setAuthCallbackInFlight(true);
+
+    // If the URL has ?code=..., explicitly exchange it. Supabase's admin-sent
+    // magic links can use PKCE format even when the browser client is
+    // configured for implicit flow.
+    if (typeof window !== "undefined") {
+      const code = new URLSearchParams(window.location.search).get("code");
+      if (code) {
+        supabase.auth.exchangeCodeForSession(code).catch(() => {
+          // If exchange fails (e.g., no verifier stored), fall through —
+          // INITIAL_SESSION will still fire with a null session and we'll
+          // surface the sign-in page.
+        });
+      }
+    }
+
+    const stripAuthParams = () => {
+      if (typeof window === "undefined") return;
+      const url = new URL(window.location.href);
+      let changed = false;
+      ["code", "token_hash", "error", "error_description", "error_code", "type"].forEach((p) => {
+        if (url.searchParams.has(p)) {
+          url.searchParams.delete(p);
+          changed = true;
+        }
+      });
+      if (url.hash) {
+        url.hash = "";
+        changed = true;
+      }
+      if (changed) window.history.replaceState({}, document.title, url.toString());
+    };
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, nextSession) => {
       setSession(nextSession);
-      if (event === "INITIAL_SESSION") {
-        resolved = true;
-        setCheckingAuth(false);
-        // Strip the auth fragment now that we've consumed it so a refresh
-        // doesn't re-trigger the flow.
-        if (
-          hasAuthHash &&
-          typeof window !== "undefined" &&
-          window.location.hash
-        ) {
-          window.history.replaceState(
-            {},
-            document.title,
-            window.location.pathname + window.location.search
-          );
+      // INITIAL_SESSION fires once after URL processing is complete (the
+      // canonical "we know if you're signed in" event). SIGNED_IN can fire
+      // later if exchangeCodeForSession completes.
+      if (event === "INITIAL_SESSION" || (event === "SIGNED_IN" && hasAuthCallback)) {
+        if (!resolved) {
+          resolved = true;
+          setCheckingAuth(false);
+        }
+        if (hasAuthCallback) {
+          setAuthCallbackInFlight(false);
+          stripAuthParams();
         }
       }
     });
 
-    // Belt-and-suspenders fallback: if INITIAL_SESSION never arrives (older
-    // supabase versions, weird timing), fall back to a direct getSession.
+    // Belt-and-suspenders fallback: if INITIAL_SESSION never arrives, fall
+    // back to a direct getSession so we don't hang indefinitely.
     const fallback = setTimeout(() => {
       if (resolved) return;
       supabase.auth.getSession().then(({ data: { session: current } }) => {
@@ -66,8 +97,9 @@ const RequireAuth: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         resolved = true;
         setSession(current);
         setCheckingAuth(false);
+        setAuthCallbackInFlight(false);
       });
-    }, 1500);
+    }, 2500);
 
     return () => {
       clearTimeout(fallback);
@@ -118,6 +150,17 @@ const RequireAuth: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       router.replace(`/auth?reason=not_allowlisted`);
     }
   }, [checkingAuth, session, allowlist.kind, pathname, router]);
+
+  if (checkingAuth && authCallbackInFlight) {
+    return (
+      <main className="min-h-screen flex items-center justify-center p-4 bg-background">
+        <div className="text-center space-y-2">
+          <div className="text-sm font-medium">Signing you in…</div>
+          <div className="text-xs text-muted-foreground">Verifying your magic link.</div>
+        </div>
+      </main>
+    );
+  }
 
   if (checkingAuth || (session && allowlist.kind === "loading")) {
     return null;
