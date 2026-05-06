@@ -40,40 +40,89 @@ const AuthPage: React.FC = () => {
     document.title = titles[mode];
   }, [mode]);
 
-  // Detect Supabase auth-callback markers in the URL. If present we explicitly
-  // handle them so magic links / recovery / signup links work whether the
-  // Site URL points at `/` or `/auth`.
+  // Handle Supabase auth callbacks landing on /auth. We do this explicitly
+  // instead of relying on the client's `detectSessionInUrl` because that
+  // auto-detection has been racing with our component mount and silently
+  // failing in production. Three formats to handle:
+  //   1. #access_token=...&refresh_token=...&type=...   (implicit flow)
+  //   2. ?code=...                                       (PKCE flow)
+  //   3. ?error=... or #error=...                        (Supabase rejected)
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
-    // PKCE-style ?code=... callback. Supabase admin-sent links sometimes use
-    // this format even when the client is configured for implicit flow.
-    const code = new URLSearchParams(window.location.search).get('code');
-    if (code) {
-      supabase.auth.exchangeCodeForSession(code).catch(() => {
-        // Fall through — onAuthStateChange / getSession will resolve.
+    const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+    const queryParams = new URLSearchParams(window.location.search);
+
+    // Implicit flow — the most common case for admin-sent magic links and
+    // recovery emails. We have a real access_token + refresh_token; just set
+    // the session manually.
+    const access_token = hashParams.get('access_token');
+    const refresh_token = hashParams.get('refresh_token');
+    const type = hashParams.get('type');
+    if (access_token && refresh_token) {
+      supabase.auth.setSession({ access_token, refresh_token }).then(({ error }) => {
+        if (error) {
+          toast({
+            title: 'Sign in failed',
+            description: error.message,
+            variant: 'destructive',
+          });
+          return;
+        }
+        // Strip the hash now that we've consumed it.
+        window.history.replaceState(
+          {},
+          document.title,
+          window.location.pathname + window.location.search
+        );
+        if (type === 'recovery') {
+          setMode('set-password');
+        } else {
+          router.replace(getReturnTarget());
+        }
       });
+      return;
     }
 
-    // Surface errors that Supabase returns in the URL (?error=... or #error=...).
-    const errorParam =
-      new URLSearchParams(window.location.search).get('error_description') ||
-      new URLSearchParams(window.location.search).get('error') ||
-      new URLSearchParams(window.location.hash.replace(/^#/, '?')).get('error_description') ||
-      new URLSearchParams(window.location.hash.replace(/^#/, '?')).get('error');
-    if (errorParam) {
+    // PKCE flow.
+    const code = queryParams.get('code');
+    if (code) {
+      supabase.auth.exchangeCodeForSession(code).then(({ error }) => {
+        if (error) {
+          toast({
+            title: 'Sign in failed',
+            description: error.message,
+            variant: 'destructive',
+          });
+          return;
+        }
+        const url = new URL(window.location.href);
+        url.searchParams.delete('code');
+        window.history.replaceState({}, document.title, url.toString());
+        router.replace(getReturnTarget());
+      });
+      return;
+    }
+
+    // Error returned in URL (e.g., otp_expired). Surface it as a toast.
+    const errorDesc =
+      queryParams.get('error_description') ||
+      queryParams.get('error') ||
+      hashParams.get('error_description') ||
+      hashParams.get('error');
+    if (errorDesc) {
       toast({
         title: 'Sign-in link problem',
-        description: decodeURIComponent(errorParam),
+        description: decodeURIComponent(errorDesc),
         variant: 'destructive',
       });
-      // Strip the error from the URL so a refresh doesn't re-toast.
       const url = new URL(window.location.href);
       ['error', 'error_description', 'error_code'].forEach((p) => url.searchParams.delete(p));
       url.hash = '';
       window.history.replaceState({}, document.title, url.toString());
     }
-  }, [toast]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Redirect if already authenticated. Skip while we're in the middle of a
   // password-recovery flow — the recovery token signs the user in, but we
