@@ -40,6 +40,41 @@ const AuthPage: React.FC = () => {
     document.title = titles[mode];
   }, [mode]);
 
+  // Detect Supabase auth-callback markers in the URL. If present we explicitly
+  // handle them so magic links / recovery / signup links work whether the
+  // Site URL points at `/` or `/auth`.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    // PKCE-style ?code=... callback. Supabase admin-sent links sometimes use
+    // this format even when the client is configured for implicit flow.
+    const code = new URLSearchParams(window.location.search).get('code');
+    if (code) {
+      supabase.auth.exchangeCodeForSession(code).catch(() => {
+        // Fall through — onAuthStateChange / getSession will resolve.
+      });
+    }
+
+    // Surface errors that Supabase returns in the URL (?error=... or #error=...).
+    const errorParam =
+      new URLSearchParams(window.location.search).get('error_description') ||
+      new URLSearchParams(window.location.search).get('error') ||
+      new URLSearchParams(window.location.hash.replace(/^#/, '?')).get('error_description') ||
+      new URLSearchParams(window.location.hash.replace(/^#/, '?')).get('error');
+    if (errorParam) {
+      toast({
+        title: 'Sign-in link problem',
+        description: decodeURIComponent(errorParam),
+        variant: 'destructive',
+      });
+      // Strip the error from the URL so a refresh doesn't re-toast.
+      const url = new URL(window.location.href);
+      ['error', 'error_description', 'error_code'].forEach((p) => url.searchParams.delete(p));
+      url.hash = '';
+      window.history.replaceState({}, document.title, url.toString());
+    }
+  }, [toast]);
+
   // Redirect if already authenticated. Skip while we're in the middle of a
   // password-recovery flow — the recovery token signs the user in, but we
   // need to keep them on /auth so they can finish setting a new password.
