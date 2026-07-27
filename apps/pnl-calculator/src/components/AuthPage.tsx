@@ -109,14 +109,23 @@ const AuthPage: React.FC = () => {
     // PKCE flow.
     const code = queryParams.get('code');
     if (code) {
-      supabase.auth.exchangeCodeForSession(code).then(({ error }) => {
+      supabase.auth.exchangeCodeForSession(code).then(async ({ error }) => {
         if (error) {
-          toast({
-            title: 'Sign in failed',
-            description: error.message,
-            variant: 'destructive',
-          });
-          return;
+          // This single-use code may have already been consumed by the
+          // client's own detectSessionInUrl running in parallel — a benign
+          // race that throws "PKCE code verifier not found in storage". If a
+          // session actually exists, sign-in succeeded on the other path;
+          // don't scare the user with a red error. Only surface it when there
+          // is genuinely no session.
+          const { data: { session } } = await supabase.auth.getSession();
+          if (!session) {
+            toast({
+              title: 'Sign in failed',
+              description: error.message,
+              variant: 'destructive',
+            });
+            return;
+          }
         }
         const target = getReturnTarget();
         window.location.replace(target.startsWith('/') ? target : '/');
