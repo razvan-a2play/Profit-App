@@ -139,6 +139,18 @@ export function storageMonthOf(charge: BilledCharge, postedInMonth: string): str
   return named ? named[1] : prevMonth(postedInMonth);
 }
 
+/**
+ * A charge's effect on AWD storage, or null if it is not AWD storage.
+ * Amazon posts adjustments as their own fee types — STARStorageFee-Reversal
+ * (a refund) and STARStorageFee-Correction (a re-charge) — which the gateway
+ * files under "other". Amounts arrive unsigned, so the name gives the sign.
+ */
+export function awdStorageEffect(c: BilledCharge): number | null {
+  if (c.group === "awd_storage") return c.amount;
+  if (!c.fee_type.startsWith("STARStorageFee")) return null;
+  return /reversal|refund|credit/i.test(c.fee_type) ? -c.amount : c.amount;
+}
+
 export function buildMonthlyReport(i: MonthlyInputs): MonthlyReport {
   const months = [...new Set(i.months)].sort();
   const asinBySku = new Map(Object.entries(i.asinBySku).map(([s, a]) => [s.toUpperCase(), a.toUpperCase()]));
@@ -155,17 +167,18 @@ export function buildMonthlyReport(i: MonthlyInputs): MonthlyReport {
     if (!costs?.billed?.ready) continue;
     if (costs.billed.storageKnown !== false) invoicedFor.add(prevMonth(posted));
     for (const c of costs.billed.charges) {
+      const awd = awdStorageEffect(c);
       const bucket =
         c.fee_type === "FBALongTermStorageFee"
           ? agedFor
           : c.group === "fba_storage"
             ? fbaStorageFor
-            : c.group === "awd_storage"
+            : awd != null
               ? awdStorageFor
               : null;
       if (!bucket) continue;
       const m = storageMonthOf(c, posted);
-      bucket.set(m, (bucket.get(m) ?? 0) + c.amount);
+      bucket.set(m, (bucket.get(m) ?? 0) + (awd ?? c.amount));
     }
   }
 

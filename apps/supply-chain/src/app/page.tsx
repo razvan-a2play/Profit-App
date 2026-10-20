@@ -19,6 +19,7 @@ import { SkuTable } from "@/components/SkuTable";
 import { AgePanel, type AgeNow } from "@/components/AgePanel";
 import { Change, changeOf } from "@/components/Change";
 import { Scorecard } from "@/components/Scorecard";
+import { CoverSection } from "@/components/CoverSection";
 import { Segmented } from "@/components/ui";
 import { Definitions } from "@/components/PeriodTable";
 import { monthLabel } from "@/lib/format";
@@ -273,6 +274,16 @@ export default function Page() {
               </dl>
             ))}
             <Definitions metrics={HEADLINE.flat().map((k) => METRICS[k])} />
+          </section>
+        )}
+
+        {current && data && (
+          <section className="mb-10">
+            <h2 className="mb-1 text-xl font-semibold tracking-tight">Storage against target days of cover</h2>
+            <p className="mb-3 text-sm text-muted-foreground">
+              What storage would have cost holding the target days of stock on every day, against what Amazon charged.
+            </p>
+            <CoverSection rows={data.skus} period={current} />
           </section>
         )}
 

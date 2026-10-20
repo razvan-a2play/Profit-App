@@ -12,7 +12,7 @@
 
 import type { BilledCharge } from "./storageCosts";
 import type { MonthCostsInput, MonthlyReport, SkuMonthRow, MonthSummary } from "./monthly";
-import { storageMonthOf } from "./monthly";
+import { awdStorageEffect, storageMonthOf } from "./monthly";
 
 export interface LedgerMonth {
   start: number;
@@ -290,9 +290,10 @@ function awdStorageByMonth(costsByMonth: InventoryInputs["costsByMonth"]): Map<s
   for (const [posted, costs] of Object.entries(costsByMonth)) {
     if (!costs?.billed?.ready) continue;
     for (const c of costs.billed.charges) {
-      if (c.group !== "awd_storage") continue;
+      const effect = awdStorageEffect(c);
+      if (effect == null) continue;
       const m = storageMonthOf(c, posted);
-      out.set(m, (out.get(m) ?? 0) + c.amount);
+      out.set(m, (out.get(m) ?? 0) + effect);
     }
   }
   return out;
