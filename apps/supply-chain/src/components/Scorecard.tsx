@@ -24,6 +24,7 @@ export function Scorecard({
   currentName,
   baseName,
   history,
+  exclude = [],
 }: {
   current: PeriodSummary;
   base: PeriodSummary | null;
@@ -31,8 +32,13 @@ export function Scorecard({
   baseName: string | null;
   /** Every month, oldest first, for the trend lines. */
   history: PeriodSummary[];
+  /** Measures that don't apply here (e.g. AWD in Canada): left out, not shown as missing. */
+  exclude?: string[];
 }) {
-  const card = buildScorecard(current, base);
+  const built = buildScorecard(current, base);
+  const rows = built.rows.filter((r) => !exclude.includes(r.measure.key));
+  const n = (v: string) => rows.filter((r) => r.verdict === v).length;
+  const card = { ...built, rows, improving: n("improving"), worse: n("worse"), holding: n("holding"), measured: rows.length - n("unknown") };
 
   return (
     <div>

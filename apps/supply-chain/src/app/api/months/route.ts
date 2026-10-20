@@ -10,6 +10,9 @@ import {
   type Gateway,
   type LedgerByAsin,
   type MonthCostsInput,
+  billedForMarket,
+  storageForMarket,
+  type Marketplace,
 } from "@platform/supply-chain-data";
 import {
   defaultMonth,
@@ -49,7 +52,18 @@ export interface MonthStatus {
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const last = url.searchParams.get("last") ?? defaultMonth();
-  const helium = getHeliumMonths();
+  // Each marketplace is reported on its own, in its own currency. Helium's
+  // pre-window history is the US only.
+  const market: Marketplace = url.searchParams.get("market") === "CA" ? "CA" : "US";
+  const helium = market === "US" ? getHeliumMonths() : {};
+  const view = (c: CachedMonth | null): MonthCostsInput | null =>
+    c
+      ? {
+          billed: c.billed ? billedForMarket(c.billed, market) : null,
+          storage: c.storage ? storageForMarket(c.storage, market) : null,
+          monthUnavailable: c.monthUnavailable,
+        }
+      : null;
   const readable = earliestReadableMonth();
   // "all" runs from the oldest month any source has: Helium's export before
   // Amazon's window, Amazon from there on.
@@ -102,8 +116,10 @@ export async function GET(req: Request) {
     // Settled months are final. A month whose fees are in but whose storage
     // report is still pending is cheap to re-check. A month that needs its fees
     // scanned waits unless nothing else is scanning.
-    if (!isSettled(c, true) && (feesDone || !scanning)) {
-      const res = await loadMonthCosts(gw, month, { dataDir: DATA_DIR, planning: false, requireSkuSales: true });
+    // Not final until the month's charges arrive signed: an older copy is
+    // still shown, but re-checked on every load until the gateway re-reads it.
+    if (!isSettled(c, true, true) && (feesDone || !scanning)) {
+      const res = await loadMonthCosts(gw, month, { dataDir: DATA_DIR, planning: false, requireSkuSales: true, requireSigned: true });
       if ("error" in res.body) error = res.body.error;
       else {
         c = res.body;
@@ -113,10 +129,15 @@ export async function GET(req: Request) {
     }
 
     const billedStatus = c?.billed?.status;
+    const mine = view(c);
     statusByMonth[month] = {
       month,
-      fees: feesRead(c, true)
+      // A month read before sales were split by marketplace has no Canadian
+      // figures yet: it waits for the re-read rather than showing the US total.
+      fees: feesRead(mine as CachedMonth | null, true)
         ? "ready"
+        : feesRead(c, true)
+          ? "queued"
         : billedStatus === "failed"
           ? "failed"
           : billedStatus === "scanning"
@@ -126,15 +147,16 @@ export async function GET(req: Request) {
       source: "amazon",
       storageReport: c?.storage?.ready ? "ready" : c?.monthUnavailable ? "unpublished" : "pending",
     };
-    costsByMonth[month] = c;
+    costsByMonth[month] = mine;
   }
 
-  const catalogue = await getCatalogue(gw);
+  const catalogue = await getCatalogue(gw, market);
   const monthly = buildMonthlyReport({
     months,
     costsByMonth,
     asinBySku: catalogue.asinBySku,
     productNameBySku: catalogue.nameBySku,
+    marketplace: market,
   });
 
   const [ledger, awdMovements, awdNow, aged, snapshots, inStock] = await Promise.all([
@@ -146,23 +168,27 @@ export async function GET(req: Request) {
     soft(gw, "/supply-chain/in-stock"),
   ]);
   const agedBySku: Record<string, Record<string, AgedSurchargeSku>> = {};
-  for (const [m, v] of Object.entries((aged?.months ?? {}) as Record<string, { skus?: Record<string, AgedSurchargeSku>; unavailable?: boolean }>)) {
-    if (!v.unavailable) agedBySku[m] = v.skus ?? {};
+  type AgedMonth = { skus?: Record<string, AgedSurchargeSku>; markets?: Record<string, { skus?: Record<string, AgedSurchargeSku> }>; unavailable?: boolean };
+  for (const [m, v] of Object.entries((aged?.months ?? {}) as Record<string, AgedMonth>)) {
+    if (!v.unavailable) agedBySku[m] = (market === "US" ? v.skus : v.markets?.[market]?.skus) ?? {};
   }
-  const awdRows = (awdNow?.rows ?? null) as Array<AwdNow & { sku: string }> | null;
+  // AWD is a US programme: Canada has none.
+  const awdRows = market === "US" ? ((awdNow?.rows ?? null) as Array<AwdNow & { sku: string }> | null) : null;
+  const marketLedger = market === "US" ? ledger : ledger?.markets?.[market];
   const report = addInventory(monthly, {
-    ledger: ledger?.asins ? (ledger as LedgerByAsin) : null,
+    ledger: marketLedger?.asins ? (marketLedger as LedgerByAsin) : null,
     asinBySku: catalogue.asinBySku,
     productNameBySku: catalogue.nameBySku,
     awdNow: awdRows ? Object.fromEntries(awdRows.map((r) => [r.sku, r])) : null,
-    awdMovements: awdMovements?.shipments ? (awdMovements as AwdMovements) : null,
+    awdMovements: market === "US" && awdMovements?.shipments ? (awdMovements as AwdMovements) : null,
     agedBySku,
     unitCost: getUnitCosts(),
-    inStock: inStock?.asins ?? null,
+    inStock: (market === "US" ? inStock?.asins : inStock?.markets?.[market]) ?? null,
     costsByMonth,
   });
   const snaps = (snapshots?.snapshots ?? []) as Array<{ date: string; age: Record<string, Record<string, number>> }>;
-  const latestSnap = snaps[snaps.length - 1] ?? null;
+  // The daily age snapshot reads the US planning report only.
+  const latestSnap = market === "US" ? snaps[snaps.length - 1] ?? null : null;
 
   // Product names travel once, not on every SKU-month row.
   const productNames: Record<string, string> = {};
@@ -173,11 +199,13 @@ export async function GET(req: Request) {
 
   return NextResponse.json({
     ...report,
+    market,
+    currency: market === "CA" ? "CAD" : "USD",
     skus,
     productNames,
     inventory: {
       ledger: sourceState(ledger),
-      awd: awdRows && awdMovements?.shipments ? sourceState(awdMovements) : awdNow == null ? "unavailable" : sourceState(awdMovements),
+      awd: market !== "US" ? "unavailable" : awdRows && awdMovements?.shipments ? sourceState(awdMovements) : awdNow == null ? "unavailable" : sourceState(awdMovements),
       inStock: sourceState(inStock),
       aged: aged == null ? "unavailable" : aged.ready ? "ready" : aged.status === "failed" ? "failed" : "scanning",
       agedPending: (aged?.pending ?? []) as string[],

@@ -55,14 +55,25 @@ export interface LoadOptions {
    * the month is scanned again rather than settled without its sales.
    */
   requireSkuSales?: boolean;
+  /**
+   * Keep re-asking the gateway for a month until its charges arrive signed
+   * (refunds negative). Older copies are still served and shown meanwhile;
+   * they just never count as final.
+   */
+  requireSigned?: boolean;
 }
 
 /** A month is settled once Amazon has given everything it is going to give. */
 export function isSettled(
   c: Pick<CachedMonth, "billed" | "storage" | "monthUnavailable"> | null,
   requireSkuSales = false,
+  requireSigned = false,
 ): boolean {
-  return Boolean(feesRead(c, requireSkuSales) && (c?.storage?.ready || c?.monthUnavailable));
+  return Boolean(
+    feesRead(c, requireSkuSales) &&
+      (!requireSigned || c?.billed?.signed === true) &&
+      (c?.storage?.ready || c?.monthUnavailable),
+  );
 }
 
 /** The month's fee scan is finished (and, if asked, carries per-SKU sales). */
@@ -84,7 +95,7 @@ export async function loadMonthCosts(
   month: string,
   opts: LoadOptions,
 ): Promise<{ status: number; body: MonthCostsResponse | { error: string } }> {
-  const { dataDir, refresh = false, planning: wantPlanning = true, requireSkuSales = false } = opts;
+  const { dataDir, refresh = false, planning: wantPlanning = true, requireSkuSales = false, requireSigned = false } = opts;
   const cacheFile = path.join(dataDir, `storage-costs-${month}.json`);
   const index = createReportIndex(dataDir);
 
@@ -93,7 +104,7 @@ export async function loadMonthCosts(
   // unsettled month is still served instantly, then refreshed in the
   // background - re-fetching the finished half on every page view is what made
   // this slow.
-  const settled = isSettled(cached, requireSkuSales);
+  const settled = isSettled(cached, requireSkuSales, requireSigned);
   const ageMs = cached ? Date.now() - new Date(cached.fetchedAt).getTime() : Infinity;
   if (cached && !refresh && (settled || ageMs < STALE_AFTER_MS)) {
     return { status: 200, body: { ...cached, cached: true, settled } };
@@ -109,7 +120,8 @@ export async function loadMonthCosts(
 
     // Anything already finished is reused rather than fetched again.
     const haveStorage = cached?.storage?.ready ? cached.storage : null;
-    const haveBilled = feesRead(cached, requireSkuSales) ? cached!.billed : null;
+    const haveBilled =
+      feesRead(cached, requireSkuSales) && (!requireSigned || cached!.billed!.signed === true) ? cached!.billed : null;
 
     // The report id for a month is remembered, because getReports is limited to
     // roughly one call every 45 seconds — far too scarce to spend on every
@@ -201,7 +213,7 @@ export async function loadMonthCosts(
     // `settled` flag keeps a pending scan from being mistaken for a final $0.
     fs.mkdirSync(dataDir, { recursive: true });
     fs.writeFileSync(cacheFile, JSON.stringify(out), "utf8");
-    return { status: 200, body: { ...out, cached: false, settled: isSettled(out, requireSkuSales) } };
+    return { status: 200, body: { ...out, cached: false, settled: isSettled(out, requireSkuSales, requireSigned) } };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Could not load storage costs.";
     // Fall back to whatever was last good rather than showing nothing.

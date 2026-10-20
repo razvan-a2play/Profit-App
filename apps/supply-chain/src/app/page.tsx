@@ -22,7 +22,7 @@ import { Scorecard } from "@/components/Scorecard";
 import { CoverSection } from "@/components/CoverSection";
 import { Segmented } from "@/components/ui";
 import { Definitions } from "@/components/PeriodTable";
-import { monthLabel } from "@/lib/format";
+import { monthLabel, setCurrency } from "@/lib/format";
 import { METRICS, periodLabel, type MetricKey } from "@/lib/metrics";
 
 type SourceState = "ready" | "scanning" | "failed" | "unavailable";
@@ -31,6 +31,8 @@ interface Payload {
   months: InventoryMonthSummary[];
   skus: InventorySkuRow[];
   status: MonthStatus[];
+  market: "US" | "CA";
+  currency: string;
   busy: boolean;
   blocked: MonthStatus | null;
   inventory: {
@@ -55,6 +57,7 @@ const HEADLINE: MetricKey[][] = [
 
 export default function Page() {
   const [range, setRange] = useState<(typeof RANGES)[number]>("all");
+  const [market, setMarket] = useState<"US" | "CA">("US");
   // A quarter against the same quarter last year is the fair default for a
   // seasonal business: long enough to smooth a month's noise, and judged
   // against its own season.
@@ -67,7 +70,7 @@ export default function Page() {
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch(`/api/months?count=${range}`, { cache: "no-store" });
+      const res = await fetch(`/api/months?count=${range}&market=${market}`, { cache: "no-store" });
       const j = (await res.json()) as Payload & { productNames?: Record<string, string> };
       if (!res.ok || j.error) throw new Error(j.error ?? `HTTP ${res.status}`);
       // Names come once per product; put them back on the rows.
@@ -79,7 +82,7 @@ export default function Page() {
     } catch (e) {
       setError((e as Error).message);
     }
-  }, [range]);
+  }, [range, market]);
   const lastFull = useRef(0);
   const lastSignature = useRef<string | null>(null);
 
@@ -116,13 +119,21 @@ export default function Page() {
     () => new Set(data?.status.filter((s) => s.fees === "ready").map((s) => s.month)),
     [data],
   );
+  // Canada sells in C$ but its stock is costed at landed cost in US$, so the
+  // measures that set one against the other are left out rather than shown wrong.
+  const isCA = data?.market === "CA";
+  const noMixedCurrency = useCallback(
+    (ps: PeriodSummary[]) =>
+      isCA ? ps.map((p) => ({ ...p, contributionMargin: null, contributionShare: null, gmroi: null, landedCostPerUnit: null })) : ps,
+    [isCA],
+  );
   const periods = useMemo(
-    () => (data ? aggregatePeriods(data.months, granularity, feeReady) : []),
-    [data, granularity, feeReady],
+    () => (data ? noMixedCurrency(aggregatePeriods(data.months, granularity, feeReady)) : []),
+    [data, granularity, feeReady, noMixedCurrency],
   );
   const monthly = useMemo(
-    () => (data ? aggregatePeriods(data.months, "month", feeReady) : []),
-    [data, feeReady],
+    () => (data ? noMixedCurrency(aggregatePeriods(data.months, "month", feeReady)) : []),
+    [data, feeReady, noMixedCurrency],
   );
   const changes = useMemo(
     () => (data ? comparePeriods(periods, data.months, feeReady) : new Map()),
@@ -163,16 +174,33 @@ export default function Page() {
       ] as const).filter(([, st]) => st !== "ready")
     : [];
 
+  setCurrency(data?.currency ?? "USD");
+
   return (
     <main className="min-h-screen bg-background">
       <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
         <header className="mb-6 flex flex-wrap items-end justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">Supply chain</h1>
-            <p className="mt-1 text-sm text-muted-foreground">What FBA and AWD cost, against what the stock sold.</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {isCA
+                ? "Amazon.ca: what FBA cost, against what the stock sold, in Canadian dollars."
+                : "Amazon.com: what FBA and AWD cost, against what the stock sold, in US dollars."}
+            </p>
           </div>
           {/* The comparison is chosen beside each heading that states it. */}
           <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+            <Segmented
+              label="Marketplace"
+              value={market}
+              options={[["US", "US"], ["CA", "Canada"]]}
+              onChange={(m) => {
+                setMarket(m);
+                setSelected(null);
+                setData(null);
+              }}
+              className="w-full sm:w-auto"
+            />
             <Segmented
               label="Period length"
               value={granularity}
@@ -249,6 +277,7 @@ export default function Page() {
               currentName={periodLabel(current.key, current.granularity)}
               baseName={base ? periodLabel(base.key, base.granularity) : null}
               history={monthly}
+              exclude={isCA ? ["awdStoragePerUnitMonth", "gmroi"] : []}
             />
           </section>
         )}
@@ -273,17 +302,34 @@ export default function Page() {
                 ))}
               </dl>
             ))}
+            {isCA ? (
+              <p className="mt-3 text-sm text-muted-foreground">
+                Sales and fees are in Canadian dollars; stock is valued at landed cost in US dollars, so contribution, GMROI and
+                landed cost per unit aren&apos;t shown for Canada. There is no AWD in Canada.
+              </p>
+            ) : null}
             <Definitions metrics={HEADLINE.flat().map((k) => METRICS[k])} />
           </section>
         )}
 
         {current && data && (
           <section className="mb-10">
-            <h2 className="mb-1 text-xl font-semibold tracking-tight">Storage against target days of cover</h2>
+            <h2 className="mb-1 text-xl font-semibold tracking-tight">FBA storage against target days of cover</h2>
             <p className="mb-3 text-sm text-muted-foreground">
-              What storage would have cost holding the target days of stock on every day, against what Amazon charged.
+              What FBA storage would have cost holding the target days of stock in FBA on every day, against what Amazon charged.
             </p>
-            <CoverSection rows={data.skus} period={current} />
+            <CoverSection rows={data.skus} period={current} channel="fba" />
+          </section>
+        )}
+
+        {current && data && !isCA && (
+          <section className="mb-10">
+            <h2 className="mb-1 text-xl font-semibold tracking-tight">AWD storage against target days of cover</h2>
+            <p className="mb-3 text-sm text-muted-foreground">
+              The same for stock waiting at AWD: what AWD storage would have cost holding the target days there, against what
+              Amazon charged.
+            </p>
+            <CoverSection rows={data.skus} period={current} channel="awd" />
           </section>
         )}
 
@@ -349,7 +395,14 @@ export default function Page() {
         {data && (
           <section>
             <h2 className="mb-1 font-medium">Inventory age</h2>
-            <AgePanel ageNow={data.inventory.ageNow} days={data.inventory.snapshotDays} names={names} />
+            {isCA ? (
+              <p className="text-sm text-muted-foreground">
+                The daily inventory-age snapshot reads Amazon&apos;s US planning report only. Canada&apos;s aged surcharge is in the
+                tables above.
+              </p>
+            ) : (
+              <AgePanel ageNow={data.inventory.ageNow} days={data.inventory.snapshotDays} names={names} />
+            )}
           </section>
         )}
       </div>

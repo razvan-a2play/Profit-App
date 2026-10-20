@@ -27,8 +27,12 @@ export interface CoverRow {
   sku: string;
   asin: string;
   productName: string;
-  /** Average units held, FBA + AWD. */
+  /** Average units held in the channel judged (FBA, AWD, or both). */
   unitsHeld: number;
+  /** Cubic feet per unit (Amazon's storage measurement), when known. */
+  cuftPerUnit: number | null;
+  /** What one unit cost to store for the month: storage ÷ units held. Bulkier units cost more. */
+  pricePerUnitMonth: number | null;
   /** Units per day the target is sized on. */
   dailyDemand: number;
   /** "forward" (the 60 days that followed) or "trailing" (latest months). */
@@ -63,6 +67,7 @@ export interface CoverMonth {
 
 export interface CoverReport {
   targetDays: number;
+  channel: CoverChannel;
   months: CoverMonth[];
   rows: CoverRow[];
 }
@@ -110,7 +115,34 @@ export function demandRate(
  * SKU-months whose FBA storage Amazon itemised are judged: without the
  * storage report there is no price per unit to scale.
  */
-export function storageVsTarget(rows: InventorySkuRow[], targetDays = 60): CoverReport {
+/**
+ * Which stock and which storage bill are judged:
+ *   fba    FBA units against FBA storage, plus the aged surcharge (FBA only)
+ *   awd    AWD units against AWD storage
+ *   total  both together
+ * Demand is the same in every case — what sold — so each channel can carry
+ * its own target: say 30 days in FBA and the rest of the cover at AWD.
+ */
+export type CoverChannel = "fba" | "awd" | "total";
+
+function channelInputs(r: InventorySkuRow, channel: CoverChannel): { held: number; storage: number; aged: number } | null {
+  // FBA units are the average Amazon billed storage on (its storage report),
+  // so storage ÷ units is exactly its price per unit: cubic feet × the rate.
+  const fbaHeld = r.avgUnitsStored ?? r.fbaUnitsAvg;
+  if (channel === "fba") {
+    if (r.fbaStorage == null || fbaHeld == null) return null;
+    return { held: fbaHeld, storage: r.fbaStorage, aged: r.agedSurcharge ?? 0 };
+  }
+  if (channel === "awd") {
+    // AWD storage is invoiced a month in arrears; until then it is unknown, not $0.
+    if (r.awdStorage == null || r.awdUnitsAvg == null) return null;
+    return { held: r.awdUnitsAvg, storage: r.awdStorage, aged: 0 };
+  }
+  if (r.fbaStorage == null || fbaHeld == null) return null;
+  return { held: fbaHeld + (r.awdUnitsAvg ?? 0), storage: r.fbaStorage + (r.awdStorage ?? 0), aged: r.agedSurcharge ?? 0 };
+}
+
+export function storageVsTarget(rows: InventorySkuRow[], targetDays = 60, channel: CoverChannel = "total"): CoverReport {
   // Months with ledger shipments, and each SKU's shipments by month.
   const knownMonths = new Set(rows.filter((r) => r.unitsShipped != null).map((r) => r.month));
   const shipped = new Map<string, Map<string, number>>();
@@ -122,13 +154,13 @@ export function storageVsTarget(rows: InventorySkuRow[], targetDays = 60): Cover
 
   const out: CoverRow[] = [];
   for (const r of rows) {
-    if (r.fbaStorage == null || r.avgUnitsHeld == null) continue;
-    const storage = r.fbaStorage + (r.awdStorage ?? 0);
-    const aged = r.agedSurcharge ?? 0;
+    const input = channelInputs(r, channel);
+    if (!input) continue;
+    const { storage, aged } = input;
     if (storage <= 0 && aged <= 0) continue;
     const d = demandRate(shipped.get(r.sku) ?? new Map(), r.month, knownMonths);
     if (!d) continue;
-    const held = r.avgUnitsHeld;
+    const held = input.held;
     const target = d.rate * targetDays;
     // Nothing held but storage charged (stock that left mid-month): no price
     // per unit to scale, so it is all excess. And a SKU holding a sliver of
@@ -141,6 +173,8 @@ export function storageVsTarget(rows: InventorySkuRow[], targetDays = 60): Cover
       asin: r.asin,
       productName: r.productName,
       unitsHeld: Math.round(held),
+      cuftPerUnit: channel === "awd" ? null : r.cuftPerUnit ?? null,
+      pricePerUnitMonth: held > 0 ? round(storage / held, 4) : null,
       dailyDemand: round(d.rate, 2),
       demandBasis: d.basis,
       targetUnits: Math.round(target),
@@ -155,6 +189,7 @@ export function storageVsTarget(rows: InventorySkuRow[], targetDays = 60): Cover
   const months = [...new Set(out.map((r) => r.month))].sort();
   return {
     targetDays,
+    channel,
     rows: out,
     months: months.map((m) => {
       const rs = out.filter((r) => r.month === m);

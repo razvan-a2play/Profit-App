@@ -180,3 +180,27 @@ describe("account-level months", () => {
     expect(r.months[0].awdStorage).toBeNull();
   });
 });
+
+describe("signed charges", () => {
+  it("nets a storage refund against the charge it reverses", () => {
+    const r = buildMonthlyReport({
+      months: ["2026-07"],
+      costsByMonth: {
+        "2026-07": { billed: billed([], {}), storage: null },
+        "2026-08": {
+          billed: {
+            ...billed([
+              charge("FBAStorageFee", "fba_storage", 1745.92),
+              charge("FBAStorageFee", "fba_storage", 141.6),
+              charge("FBAStorageFee", "fba_storage", -141.6),
+            ]),
+            signed: true,
+          },
+          storage: null,
+        },
+      },
+      asinBySku: {},
+    });
+    expect(r.months[0].fbaStorage).toBe(1745.92);
+  });
+});

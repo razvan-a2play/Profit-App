@@ -74,7 +74,11 @@ export async function GET(req: Request) {
       utilizationWeeks: costs.storage?.totals?.utilization_ratio_weeks ?? null,
     });
 
-    const settled = Boolean(costs.billed?.ready && (costs.storage?.ready || costs.monthUnavailable));
+    // Final only once the month's charges are signed (refunds netted), or an
+    // older copy would be cached here for good.
+    const settled = Boolean(
+      costs.billed?.ready && costs.billed?.signed === true && (costs.storage?.ready || costs.monthUnavailable),
+    );
     const payload = {
       ...report,
       settled,

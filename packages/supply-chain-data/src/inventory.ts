@@ -290,7 +290,7 @@ function awdStorageByMonth(costsByMonth: InventoryInputs["costsByMonth"]): Map<s
   for (const [posted, costs] of Object.entries(costsByMonth)) {
     if (!costs?.billed?.ready) continue;
     for (const c of costs.billed.charges) {
-      const effect = awdStorageEffect(c);
+      const effect = awdStorageEffect(c, costs.billed.signed === true);
       if (effect == null) continue;
       const m = storageMonthOf(c, posted);
       out.set(m, (out.get(m) ?? 0) + effect);
@@ -399,7 +399,7 @@ export function addInventory(report: MonthlyReport, i: InventoryInputs): Invento
       const base: SkuMonthRow =
         existing.get(sku) ?? {
           month: m, sku, asin: asinOf.get(sku) ?? i.asinBySku[sku] ?? "", productName: i.productNameBySku?.[sku] ?? "", unitsSold: 0, unitsRefunded: 0, netSales: 0,
-          fulfilmentFees: 0, fulfilmentPerUnit: null, referralFees: 0, fbaStorage: null, avgUnitsStored: null,
+          fulfilmentFees: 0, fulfilmentPerUnit: null, referralFees: 0, fbaStorage: null, avgUnitsStored: null, cuftPerUnit: null,
           storagePerUnitSold: null, storageShareOfSales: null, costShareOfSales: null,
         };
       const l = ledgerBySku.get(sku);

@@ -147,6 +147,8 @@ export interface BilledCharge {
   currency: string | null;
   /** The AWD shipment or replenishment order the charge belongs to, when there is one. */
   reference: string;
+  /** Marketplace the charge was billed in (from its currency). Older copies lack it; read the currency then. */
+  marketplace?: string;
   posted_date: string | null;
 }
 
@@ -174,6 +176,12 @@ export interface BilledFees {
    * reads as unknown rather than as $0.
    */
   storageKnown?: boolean;
+  /** Every marketplace in its own currency (US, CA, MX). Top-level totals are the US alone. */
+  by_market?: Record<string, MarketFees>;
+  /** Charges keep their sign: a refund or reversal is a negative cost. Older gateway copies have every amount positive. */
+  signed?: boolean;
+  /** An older copy served while the gateway re-reads the month. */
+  superseded?: boolean;
   /** Where the month came from, when not Amazon's finance API. */
   source?: "amazon" | "helium";
 }
@@ -183,6 +191,50 @@ export interface BilledFees {
  * the portfolio figures, never listed as a product.
  */
 export const ACCOUNT_LEVEL_SKU = "__ACCOUNT__";
+
+export interface MarketFees {
+  total: number;
+  by_group: Partial<Record<FeeGroup, number>>;
+  by_type: BilledFees["by_type"];
+  currency: string | null;
+  by_sku: Record<string, SkuMonthSales>;
+}
+
+export type Marketplace = "US" | "CA";
+
+const MARKET_BY_CURRENCY: Record<string, string> = { USD: "US", CAD: "CA", MXN: "MX" };
+
+/** A charge's marketplace: tagged by the gateway, or read from its currency in older copies. */
+export function chargeMarket(c: BilledCharge): string {
+  return c.marketplace ?? MARKET_BY_CURRENCY[c.currency ?? ""] ?? "US";
+}
+
+/**
+ * One marketplace's slice of a month's fees: its charges, totals and sales
+ * per SKU, in its own currency. A copy read before the gateway split sales by
+ * marketplace has only the combined figure: the US keeps it (as before), and
+ * Canada reports its sales as not yet read rather than borrowing the US total.
+ */
+export function billedForMarket(b: BilledFees, market: Marketplace): BilledFees {
+  const charges = (b.charges ?? []).filter((c) => chargeMarket(c) === market);
+  const m = b.by_market?.[market];
+  const by_group: BilledFees["by_group"] = {};
+  for (const c of charges) by_group[c.group] = (by_group[c.group] ?? 0) + c.amount;
+  return {
+    ...b,
+    charges,
+    total: m?.total ?? charges.reduce((a, c) => a + c.amount, 0),
+    by_group: m?.by_group ?? by_group,
+    by_type: m?.by_type ?? b.by_type.filter(() => market === "US"),
+    by_sku: m?.by_sku ?? (market === "US" ? b.by_sku : undefined),
+  };
+}
+
+/** One marketplace's rows of the storage-fee report, with its own totals. */
+export function storageForMarket(s: StorageFeeResult, market: Marketplace): StorageFeeResult {
+  const rows = s.rows.filter((r) => (r.country ? r.country.toUpperCase() : "US") === market);
+  return { ...s, rows, totals: s.by_country?.[market] ?? (market === "US" ? s.totals : undefined) };
+}
 
 export interface SkuMonthSales {
   units_sold: number;

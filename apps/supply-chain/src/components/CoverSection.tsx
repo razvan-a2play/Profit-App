@@ -1,38 +1,53 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { storageVsTarget, type InventorySkuRow, type PeriodSummary } from "@platform/supply-chain-data";
+import { storageVsTarget, type CoverChannel, type InventorySkuRow, type PeriodSummary } from "@platform/supply-chain-data";
 import { count, money, monthLabel } from "@/lib/format";
 import { periodLabel } from "@/lib/metrics";
 import { TONE } from "./ui";
 
-const STORE_KEY = "supply-chain:target-days";
+const CHANNEL = {
+  fba: { stock: "FBA stock", storage: "FBA storage", id: "fba" },
+  awd: { stock: "AWD stock", storage: "AWD storage", id: "awd" },
+  total: { stock: "stock (FBA + AWD)", storage: "storage", id: "total" },
+} as const;
 
 /**
  * What storage would have cost holding exactly the target days of stock,
  * against what Amazon charged. Money lost to excess and money saved by
  * running lean are shown apart, so one cannot hide the other.
  */
-export function CoverSection({ rows, period }: { rows: InventorySkuRow[]; period: PeriodSummary }) {
+export function CoverSection({
+  rows,
+  period,
+  channel = "total",
+}: {
+  rows: InventorySkuRow[];
+  period: PeriodSummary;
+  channel?: CoverChannel;
+}) {
+  const c = CHANNEL[channel];
+  const storeKey = `supply-chain:target-days:${channel}`;
+  const withAged = channel !== "awd";
   const [target, setTarget] = useState(60);
   useEffect(() => {
     try {
-      const saved = Number(localStorage.getItem(STORE_KEY));
+      const saved = Number(localStorage.getItem(storeKey));
       if (saved >= 7 && saved <= 365) setTarget(saved);
     } catch {
       /* storage unavailable: keep 60 */
     }
-  }, []);
+  }, [storeKey]);
   const choose = (v: number) => {
     setTarget(v);
     try {
-      localStorage.setItem(STORE_KEY, String(v));
+      localStorage.setItem(storeKey, String(v));
     } catch {
       /* not remembered, still applied */
     }
   };
 
-  const report = useMemo(() => storageVsTarget(rows, target), [rows, target]);
+  const report = useMemo(() => storageVsTarget(rows, target, channel), [rows, target, channel]);
   const inPeriod = new Set(period.months);
   const months = report.months.filter((m) => inPeriod.has(m.month));
   const total = (k: "actualStorage" | "agedSurcharge" | "idealStorage" | "overstockCost" | "leanSaving" | "net") =>
@@ -42,10 +57,11 @@ export function CoverSection({ rows, period }: { rows: InventorySkuRow[]; period
 
   // Per SKU over the period: excess cost summed, cover from the period's totals.
   const skus = useMemo(() => {
-    const by = new Map<string, { sku: string; name: string; held: number; target: number; demand: number; actual: number; aged: number; ideal: number; excess: number; n: number }>();
+    const by = new Map<string, { sku: string; name: string; held: number; target: number; demand: number; actual: number; aged: number; ideal: number; excess: number; n: number; cuft: number | null }>();
     for (const r of report.rows) {
       if (!inPeriod.has(r.month)) continue;
-      const cur = by.get(r.sku) ?? { sku: r.sku, name: r.productName, held: 0, target: 0, demand: 0, actual: 0, aged: 0, ideal: 0, excess: 0, n: 0 };
+      const cur = by.get(r.sku) ?? { sku: r.sku, name: r.productName, held: 0, target: 0, demand: 0, actual: 0, aged: 0, ideal: 0, excess: 0, n: 0, cuft: null };
+      if (r.cuftPerUnit) cur.cuft = r.cuftPerUnit;
       cur.held += r.unitsHeld;
       cur.target += r.targetUnits;
       cur.demand += r.dailyDemand;
@@ -66,11 +82,11 @@ export function CoverSection({ rows, period }: { rows: InventorySkuRow[]; period
   return (
     <div>
       <div className="mb-3 flex flex-wrap items-center gap-3 text-sm">
-        <label htmlFor="target-days" className="text-muted-foreground">
+        <label htmlFor={`target-days-${c.id}`} className="text-muted-foreground">
           Target cover
         </label>
         <input
-          id="target-days"
+          id={`target-days-${c.id}`}
           type="number"
           min={7}
           max={365}
@@ -82,13 +98,14 @@ export function CoverSection({ rows, period }: { rows: InventorySkuRow[]; period
           }}
           className="h-11 w-24 rounded-md border border-input bg-background px-3 tabular-nums sm:h-9"
         />
-        <span className="text-muted-foreground">days of stock (FBA + AWD), every day of the month</span>
+        <span className="text-muted-foreground">days of {c.stock}, every day of the month</span>
       </div>
 
       {months.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          No month in {name} has Amazon&apos;s per-SKU storage report yet, so there is no storage price to scale. Months from
-          December 2025 on have it.
+          {channel === "awd"
+            ? `No month in ${name} has its AWD storage invoiced yet (Amazon bills it the following month), so there is no AWD price to scale.`
+            : `No month in ${name} has Amazon's per-SKU storage report yet, so there is no storage price to scale. Months from December 2025 on have it.`}
         </p>
       ) : (
         <>
@@ -99,7 +116,7 @@ export function CoverSection({ rows, period }: { rows: InventorySkuRow[]; period
                   {money(net)} lost
                 </span>{" "}
                 <span className="text-muted-foreground">
-                  in {name} against holding {target} days of stock
+                  on {c.storage} in {name} against holding {target} days of {c.stock}
                 </span>
               </>
             ) : (
@@ -108,16 +125,19 @@ export function CoverSection({ rows, period }: { rows: InventorySkuRow[]; period
                   {money(-net)} saved
                 </span>{" "}
                 <span className="text-muted-foreground">
-                  in {name} against holding {target} days of stock
+                  on {c.storage} in {name} against holding {target} days of {c.stock}
                 </span>
               </>
             )}
           </p>
           <p className="mb-4 text-sm text-muted-foreground">
-            Storage charged {money(total("actualStorage") + total("agedSurcharge"))} (aged surcharge {money(total("agedSurcharge"))}); at{" "}
+            {c.storage[0].toUpperCase() + c.storage.slice(1)} charged {money(total("actualStorage") + total("agedSurcharge"))}
+            {withAged ? ` (aged surcharge ${money(total("agedSurcharge"))})` : ""}; at{" "}
             {target} days it would have been {money(total("idealStorage"))}. Excess stock cost {money(total("overstockCost"))}; running
             below target saved {money(total("leanSaving"))}, with the stockout risk that carries.
-            {missing.length ? ` Not judged: ${missing.map((m) => monthLabel(m)).join(", ")} (no per-SKU storage report).` : ""}
+            {missing.length
+              ? ` Not judged: ${missing.map((m) => monthLabel(m)).join(", ")} (${channel === "awd" ? "AWD storage not invoiced yet" : "no per-SKU storage report"}).`
+              : ""}
             {trailing ? " The latest months are sized on trailing demand until 60 days of what followed are known." : ""}
           </p>
 
@@ -128,7 +148,7 @@ export function CoverSection({ rows, period }: { rows: InventorySkuRow[]; period
                   <th scope="col" className="px-3 py-2 text-left font-medium">Month</th>
                   <th scope="col" className="px-3 py-2 text-right font-medium">Days of cover held</th>
                   <th scope="col" className="px-3 py-2 text-right font-medium">Storage charged</th>
-                  <th scope="col" className="px-3 py-2 text-right font-medium">Aged surcharge</th>
+                  {withAged ? <th scope="col" className="px-3 py-2 text-right font-medium">Aged surcharge</th> : null}
                   <th scope="col" className="px-3 py-2 text-right font-medium">At {target} days</th>
                   <th scope="col" className="px-3 py-2 text-right font-medium">Paid for excess</th>
                   <th scope="col" className="px-3 py-2 text-right font-medium">Saved running lean</th>
@@ -144,7 +164,7 @@ export function CoverSection({ rows, period }: { rows: InventorySkuRow[]; period
                     </th>
                     <td className="px-3 py-2 text-right tabular-nums">{m.coverDays != null ? `${count(m.coverDays)} d` : "—"}</td>
                     <td className="px-3 py-2 text-right tabular-nums">{money(m.actualStorage)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">{money(m.agedSurcharge)}</td>
+                    {withAged ? <td className="px-3 py-2 text-right tabular-nums">{money(m.agedSurcharge)}</td> : null}
                     <td className="px-3 py-2 text-right tabular-nums">{money(m.idealStorage)}</td>
                     <td className="px-3 py-2 text-right tabular-nums" style={{ color: m.overstockCost > 0 ? TONE.bad : undefined }}>
                       {money(m.overstockCost)}
@@ -159,13 +179,21 @@ export function CoverSection({ rows, period }: { rows: InventorySkuRow[]; period
             </table>
           </div>
 
-          <h3 className="mb-2 text-sm font-medium">SKUs in {name}, most costly excess first</h3>
+          <h3 className="mb-2 text-sm font-medium">SKUs in {name}, most costly excess first ({c.stock})</h3>
           <div className="overflow-x-auto rounded-lg border border-border">
             <table className="w-full text-sm">
               <thead className="bg-muted text-xs text-muted-foreground">
                 <tr>
                   <th scope="col" className="px-3 py-2 text-left font-medium">SKU</th>
                   <th scope="col" className="px-3 py-2 text-right font-medium">Days of cover held</th>
+                  {channel !== "awd" ? (
+                    <th scope="col" className="px-3 py-2 text-right font-medium" title="Cubic feet per unit, as Amazon measured it for storage">
+                      Cu ft / unit
+                    </th>
+                  ) : null}
+                  <th scope="col" className="px-3 py-2 text-right font-medium" title="Storage charged ÷ units held: what one unit cost to store for a month">
+                    $ / unit-month
+                  </th>
                   <th scope="col" className="px-3 py-2 text-right font-medium">Avg units held</th>
                   <th scope="col" className="px-3 py-2 text-right font-medium">Target units</th>
                   <th scope="col" className="px-3 py-2 text-right font-medium">Storage charged</th>
@@ -181,6 +209,10 @@ export function CoverSection({ rows, period }: { rows: InventorySkuRow[]; period
                       {s.name ? <span className="block truncate text-xs text-muted-foreground">{s.name}</span> : null}
                     </th>
                     <td className="px-3 py-2 text-right tabular-nums">{s.demand > 0 ? `${count(Math.round(s.held / s.demand))} d` : "no sales"}</td>
+                    {channel !== "awd" ? (
+                      <td className="px-3 py-2 text-right tabular-nums">{s.cuft != null ? s.cuft.toFixed(3) : "—"}</td>
+                    ) : null}
+                    <td className="px-3 py-2 text-right tabular-nums">{s.held > 0 ? `${(s.actual / s.held).toFixed(3)}` : "—"}</td>
                     <td className="px-3 py-2 text-right tabular-nums">{count(Math.round(s.held / s.n))}</td>
                     <td className="px-3 py-2 text-right tabular-nums">{count(Math.round(s.target / s.n))}</td>
                     <td className="px-3 py-2 text-right tabular-nums">{money(s.actual + s.aged)}</td>
@@ -201,10 +233,13 @@ export function CoverSection({ rows, period }: { rows: InventorySkuRow[]; period
                 mid-month (half the month, the next month, half the month after). The latest months use the trailing rate.
               </p>
               <p>
-                Storage at target keeps each SKU&apos;s real price per unit — its FBA storage from Amazon&apos;s per-ASIN report
-                plus its share of AWD storage — and scales it to the target quantity. Stock that turns within {target} days
-                never reaches 181, so the aged surcharge is all counted as excess. Running below target is capped at 4× the
-                storage charged, so a SKU holding a sliver of its target can&apos;t dominate the savings.
+                {channel === "awd"
+                  ? `Units held are the SKU's average AWD stock, worked back from today's AWD stock through the shipments in and replenishment orders out. AWD storage at target keeps its price per unit (its share of the month's AWD invoice, by AWD units held) and scales it to the target quantity.`
+                  : channel === "fba"
+                    ? `Units held are the SKU's average FBA stock from Amazon's ledger. FBA storage at target keeps its real price per unit, from Amazon's per-ASIN storage report, and scales it to the target quantity. Stock that turns within the target never reaches 181 days, so the aged surcharge is all counted as excess.`
+                    : `Storage at target keeps each SKU's real price per unit (FBA storage from Amazon's per-ASIN report plus its share of AWD storage) and scales it to the target quantity. The aged surcharge is all counted as excess.`}{" "}
+                Running below target is capped at 4× the storage charged, so a SKU holding a sliver of its target can&apos;t
+                dominate the savings.
               </p>
               <p>Amazon charged no low-inventory fee in any month read, so running lean has cost nothing in fees.</p>
             </div>

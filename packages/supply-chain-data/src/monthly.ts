@@ -85,9 +85,12 @@ export interface SkuMonthRow {
   fulfilmentFees: number;
   fulfilmentPerUnit: number | null;
   referralFees: number;
-  /** This SKU's share of its ASIN's storage-report fee. Null when the month has no storage report. */
+  /** This SKU's share of its ASIN's US storage-report fee. Null when the month has no storage report. */
   fbaStorage: number | null;
+  /** Average units Amazon billed US FBA storage on this month (its share of the ASIN's). */
   avgUnitsStored: number | null;
+  /** Cubic feet per unit, as Amazon measured it for storage. */
+  cuftPerUnit: number | null;
   storagePerUnitSold: number | null;
   storageShareOfSales: number | null;
   /** Fulfilment + FBA storage as a share of net sales. */
@@ -107,6 +110,8 @@ export interface MonthlyInputs {
   /** SKU -> ASIN, to tie the per-ASIN storage report to SKUs. */
   asinBySku: Record<string, string>;
   productNameBySku?: Record<string, string>;
+  /** Marketplace whose storage rows are read. Default US. */
+  marketplace?: "US" | "CA";
 }
 
 const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
@@ -143,11 +148,14 @@ export function storageMonthOf(charge: BilledCharge, postedInMonth: string): str
  * A charge's effect on AWD storage, or null if it is not AWD storage.
  * Amazon posts adjustments as their own fee types — STARStorageFee-Reversal
  * (a refund) and STARStorageFee-Correction (a re-charge) — which the gateway
- * files under "other". Amounts arrive unsigned, so the name gives the sign.
+ * files under "other". From signed months the amount already says which way
+ * it went; older copies stored every amount positive, so there the name
+ * gives the sign.
  */
-export function awdStorageEffect(c: BilledCharge): number | null {
+export function awdStorageEffect(c: BilledCharge, signed = false): number | null {
   if (c.group === "awd_storage") return c.amount;
   if (!c.fee_type.startsWith("STARStorageFee")) return null;
+  if (signed) return c.amount;
   return /reversal|refund|credit/i.test(c.fee_type) ? -c.amount : c.amount;
 }
 
@@ -167,7 +175,7 @@ export function buildMonthlyReport(i: MonthlyInputs): MonthlyReport {
     if (!costs?.billed?.ready) continue;
     if (costs.billed.storageKnown !== false) invoicedFor.add(prevMonth(posted));
     for (const c of costs.billed.charges) {
-      const awd = awdStorageEffect(c);
+      const awd = awdStorageEffect(c, costs.billed.signed === true);
       const bucket =
         c.fee_type === "FBALongTermStorageFee"
           ? agedFor
@@ -192,13 +200,20 @@ export function buildMonthlyReport(i: MonthlyInputs): MonthlyReport {
     const group = (g: string) => (billed?.by_group as Record<string, number> | undefined)?.[g] ?? 0;
 
     // ── per SKU ──
-    const storageRows = costs?.storage?.ready ? costs.storage.rows : [];
-    const storageByAsin = new Map<string, { fee: number; units: number; name: string }>();
+    // One marketplace's rows only: the report carries every country's storage,
+    // and Canada's belongs to neither US sales nor the US stock it would be
+    // divided by (nor the other way round).
+    const market = i.marketplace ?? "US";
+    const storageRows = (costs?.storage?.ready ? costs.storage.rows : []).filter(
+      (r) => (r.country ? r.country.toUpperCase() : "US") === market,
+    );
+    const storageByAsin = new Map<string, { fee: number; units: number; cuft: number | null; name: string }>();
     for (const r of storageRows) {
       const k = r.asin.toUpperCase();
-      const cur = storageByAsin.get(k) ?? { fee: 0, units: 0, name: r.product_name };
+      const cur = storageByAsin.get(k) ?? { fee: 0, units: 0, cuft: null, name: r.product_name };
       cur.fee += r.fee;
       cur.units += r.avg_units;
+      if (r.item_volume_cuft > 0) cur.cuft = r.item_volume_cuft;
       storageByAsin.set(k, cur);
     }
 
@@ -255,6 +270,7 @@ export function buildMonthlyReport(i: MonthlyInputs): MonthlyReport {
         referralFees: round(referral),
         fbaStorage: fbaStorage != null ? round(fbaStorage) : null,
         avgUnitsStored: avgUnitsStored != null ? Math.round(avgUnitsStored) : null,
+        cuftPerUnit: st?.cuft ?? null,
         storagePerUnitSold: fbaStorage != null && units > 0 ? round(fbaStorage / units, 3) : null,
         storageShareOfSales: fbaStorage != null && netSales > 0 ? round(fbaStorage / netSales, 4) : null,
         costShareOfSales: netSales > 0 ? round((fulfilment + (fbaStorage ?? 0)) / netSales, 4) : null,

@@ -29,7 +29,7 @@ export interface Catalogue {
   fetchedAt: string;
 }
 
-const CATALOGUE_FILE = path.join(DATA_DIR, "catalogue.json");
+const catalogueFile = (market: string) => path.join(DATA_DIR, market === "US" ? "catalogue.json" : `catalogue-${market}.json`);
 const CATALOGUE_MAX_AGE_MS = 24 * 3600 * 1000;
 
 /**
@@ -37,7 +37,8 @@ const CATALOGUE_MAX_AGE_MS = 24 * 3600 * 1000;
  * ASIN and sales are per SKU; this is what joins them. Refreshed daily, and a
  * stale copy beats none when the gateway is down.
  */
-export async function getCatalogue(gw: Gateway): Promise<Catalogue> {
+export async function getCatalogue(gw: Gateway, market: "US" | "CA" = "US"): Promise<Catalogue> {
+  const CATALOGUE_FILE = catalogueFile(market);
   let cached: Catalogue | null = null;
   try {
     cached = JSON.parse(fs.readFileSync(CATALOGUE_FILE, "utf8")) as Catalogue;
@@ -46,7 +47,7 @@ export async function getCatalogue(gw: Gateway): Promise<Catalogue> {
     /* no cache yet */
   }
   try {
-    const items = (await gw(`/inventory/?details=false`)) as Array<{
+    const items = (await gw(`/inventory/?details=false${market === "US" ? "" : `&marketplace=${market}`}`)) as Array<{
       seller_sku: string;
       asin?: string | null;
       product_name?: string | null;

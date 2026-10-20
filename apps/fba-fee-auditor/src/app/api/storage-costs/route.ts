@@ -23,6 +23,8 @@ export async function GET(req: Request) {
   const { status, body } = await loadMonthCosts(gw, month, {
     dataDir: DATA_DIR,
     refresh: url.searchParams.get("refresh") === "1",
+    // Re-ask until the gateway has the month with refunds netted (signed charges).
+    requireSigned: true,
   });
   return NextResponse.json(body, { status });
 }
