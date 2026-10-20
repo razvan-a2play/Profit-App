@@ -1,0 +1,5 @@
+# Business data the app caches at runtime: COGS, fee reports, storage months
+.data/
+# Local copies of env files (hold API keys)
+.env*.bak
+*.tsbuildinfo

@@ -10,6 +10,28 @@ export interface FbaFeeRow {
   nonPeak: number;
   peak: number;
   weightBasis: string;
+  /**
+   * Amazon charges by the item's SELLING price as well as its size and weight:
+   * products under $10 get Low-Price FBA rates, over $50 a higher rate. The
+   * published table has a column per band. Supplied on rows parsed from a
+   * published rate card; the built-in table carries only the mid band, so these
+   * stay undefined there and `nonPeak` is used for every price.
+   */
+  lowPrice?: number | null;
+  highPrice?: number | null;
+  /**
+   * Bulky, extra-large and the top large-standard band are not flat rates.
+   * Amazon publishes them as a base plus a surcharge per weight interval above
+   * a threshold — and the interval is NOT always a pound:
+   *   "$8.84 + $0.38/lb interval above first lb"          -> interval 1 lb
+   *   "$6.15 + $0.08 per 4 oz interval above first 3 lb"  -> interval 0.25 lb
+   *   "$6.15 + $0.16/half-lb interval above first 3 lb"   -> interval 0.5 lb
+   * so the interval size is carried explicitly. Absent on flat rows, where
+   * `nonPeak` is the whole fee.
+   */
+  surchargePerInterval?: number | null;
+  surchargeIntervalLb?: number | null;
+  surchargeAboveLb?: number | null;
 }
 
 export interface SizeTier {
@@ -80,7 +102,10 @@ export const SIZE_TIERS: ReadonlyArray<SizeTier> = [
   { name: "Small standard", maxWeight: 1, maxLongest: 15, maxMedian: 12, maxShortest: 0.75, maxLPG: null, weightBasis: "Unit weight" },
   { name: "Large standard", maxWeight: 20, maxLongest: 18, maxMedian: 14, maxShortest: 8, maxLPG: null, weightBasis: "Greater of unit or dimensional weight" },
   { name: "Large bulky", maxWeight: 50, maxLongest: 59, maxMedian: 33, maxShortest: 33, maxLPG: null, weightBasis: "Greater of unit or dimensional weight" },
-  { name: "Extra-large", maxWeight: 150, maxLongest: 108, maxMedian: null, maxShortest: null, maxLPG: 165, weightBasis: "Greater of unit or dimensional weight" },
+  // No upper weight bound: Amazon publishes an "Extra-large 150+ lb" rate, so
+  // a heavier unit is still extra-large. Capping this at 150 classified those
+  // units as "Unknown" and returned a $0 fee, which reads as no overcharge.
+  { name: "Extra-large", maxWeight: null, maxLongest: 108, maxMedian: null, maxShortest: null, maxLPG: 165, weightBasis: "Greater of unit or dimensional weight" },
 ];
 
 export const REFERRAL_FEES: Readonly<Record<string, ReadonlyArray<ReferralCondition>>> = {
@@ -130,6 +155,25 @@ export const REFERRAL_FEES: Readonly<Record<string, ReadonlyArray<ReferralCondit
   ],
 };
 
+/** What Ships in Product Packaging did to this fee, if anything. */
+export interface SippEffect {
+  /**
+   * - discount: certified, and the published SIPP table had a matching row
+   * - packaging_fee: not certified, and the table charges a packaging fee here
+   * - no_rate: certified, but no SIPP row covers this tier/band, so the fee is
+   *   shown WITHOUT a discount rather than with a guessed one
+   * - none: nothing applies
+   */
+  status: "discount" | "packaging_fee" | "no_rate" | "none";
+  /**
+   * Signed per-unit change, applied AFTER the fuel surcharge: negative for a
+   * discount, positive for a packaging fee.
+   */
+  amount: number;
+  /** Where the figure came from: the pasted SIPP card, or the built-in table. */
+  source?: "published" | "built-in";
+}
+
 export interface FbaTierResult {
   tier: string;
   feeNonPeak: number;
@@ -137,19 +181,100 @@ export interface FbaTierResult {
   billableWeight: number;
   dimWeight: number;
   weightBasis?: string;
+  sipp?: SippEffect;
 }
 
 /**
  * Classify a product into an Amazon FBA size tier and compute fulfillment fees.
  * All inputs are in metric (cm, kg). Selling price is unused but kept for API parity.
  */
+/**
+ * Optional replacement for the built-in fee tables.
+ *
+ * The built-in tables go stale whenever Amazon revises its rates, and a stale
+ * table silently turns into false "overcharge" findings. Callers that hold a
+ * freshly-entered published rate card pass it here so the comparison is made
+ * against what Amazon publishes today. Omit it and the built-in tables are
+ * used exactly as before.
+ */
+export interface FeeTableOverride {
+  regular: ReadonlyArray<FbaFeeRow>;
+  hazmat: ReadonlyArray<FbaFeeRow>;
+  /**
+   * Ships in Product Packaging, from the published SIPP rate card. Same row
+   * shape as the fee tables, but every figure is a per-unit DISCOUNT for a
+   * certified unit (already resolved from a lowered fee where the page stated
+   * one), by the same price bands.
+   */
+  sipp?: ReadonlyArray<FbaFeeRow>;
+  /** Per-unit packaging fee Amazon adds to units that are NOT SIPP-certified. */
+  nonSippPackaging?: ReadonlyArray<FbaFeeRow>;
+}
+
+/**
+ * Does a published weight band contain this weight? Bands are written four
+ * ways: "4 oz or less", "4+ to 8 oz", "0 to 50 lb", and the open-ended "150+ lb".
+ * Ounce bands compare the billable weight in ounces, pound bands in pounds.
+ */
+export function weightBandMatches(weightRange: string, billableWeight: number): boolean {
+  const range = weightRange.toLowerCase();
+  const weightOz = billableWeight * 16;
+  if (range.includes("or less")) {
+    const max = parseFloat(range.match(/([\d.]+)/)?.[1] || "0");
+    return range.includes("oz") ? weightOz <= max : billableWeight <= max;
+  }
+  if (range.includes("+ to")) {
+    const parts = range.match(/([\d.]+)\+\s*to\s*([\d.]+)/);
+    if (!parts) return false;
+    const min = parseFloat(parts[1]);
+    const max = parseFloat(parts[2]);
+    return range.includes("oz")
+      ? weightOz > min && weightOz <= max
+      : billableWeight > min && billableWeight <= max;
+  }
+  if (range.includes("to")) {
+    const parts = range.match(/([\d.]+)\s*to\s*([\d.]+)/);
+    if (!parts) return false;
+    const min = parseFloat(parts[1]);
+    const max = parseFloat(parts[2]);
+    return range.includes("oz")
+      ? weightOz >= min && weightOz <= max
+      : billableWeight >= min && billableWeight <= max;
+  }
+  // Open-ended top band, e.g. "150+ lb": a lower bound and nothing above it.
+  const parts = range.match(/^([\d.]+)\+\s*(oz|lb)$/);
+  if (!parts) return false;
+  const min = parseFloat(parts[1]);
+  return parts[2] === "oz" ? weightOz > min : billableWeight > min;
+}
+
+/**
+ * The figure a row carries for this selling price. Amazon's tables have a
+ * column per price band - under $10 is the Low-Price FBA rate, over $50 its own
+ * rate - and auditing an item against the wrong column invents a variance.
+ */
+export function bandValue(row: FbaFeeRow, sellingPrice: number): number {
+  if (sellingPrice > 0) {
+    if (sellingPrice < 10 && row.lowPrice != null) return row.lowPrice;
+    if (sellingPrice > 50 && row.highPrice != null) return row.highPrice;
+  }
+  return row.nonPeak;
+}
+
 export function calculateFBATierAndFee(
   length: number,
   width: number,
   height: number,
   weight: number,
-  _sellingPrice: number,
+  sellingPrice: number,
   hazmat = false,
+  feeTableOverride?: FeeTableOverride,
+  /**
+   * Whether this SKU is SIPP-certified. A fact you state, never inferred from
+   * the fee - inferring it from a lower charge would let an overcharge pass as
+   * "just not certified". Omitted, SIPP is left out entirely.
+   */
+  sippCertified?: boolean,
 ): FbaTierResult {
   if (!length || !width || !height || !weight) {
     return { tier: "Unknown", feeNonPeak: 0, feePeak: 0, billableWeight: 0, dimWeight: 0 };
@@ -190,48 +315,49 @@ export function calculateFBATierAndFee(
 
   let feeNonPeak = 0;
   let feePeak = 0;
+  // Set when a published rate-card row supplied the bulky/extra-large formula,
+  // so the hardcoded fallbacks below don't overwrite it.
+  let usedPublishedFormula = false;
   const normalizedTier = sizeTier.toLowerCase();
-  const weightOz = billableWeight * 16;
-  const feeTable = hazmat ? HAZMAT_FBA_FEES : FBA_FEES;
+  // A supplied card wins, but only where it actually has rows for the tier we
+  // need — a partial card (e.g. large standard only) falls back per-lookup
+  // rather than reporting $0 for everything it doesn't cover.
+  const overrideTable = hazmat ? feeTableOverride?.hazmat : feeTableOverride?.regular;
+  const builtIn = hazmat ? HAZMAT_FBA_FEES : FBA_FEES;
+  const feeTable =
+    overrideTable && overrideTable.some((r) => r.tier === sizeTier.toLowerCase())
+      ? overrideTable
+      : builtIn;
 
   for (const feeRow of feeTable) {
     if (feeRow.tier === normalizedTier) {
-      const range = feeRow.weightRange.toLowerCase();
-      let matches = false;
-
-      if (range.includes("or less")) {
-        const maxOz = parseFloat(range.match(/([\d.]+)/)?.[1] || "0");
-        matches = weightOz <= maxOz;
-      } else if (range.includes("+ to")) {
-        const parts = range.match(/([\d.]+)\+\s*to\s*([\d.]+)/);
-        if (parts) {
-          const minVal = parseFloat(parts[1]);
-          const maxVal = parseFloat(parts[2]);
-          matches = range.includes("oz")
-            ? weightOz > minVal && weightOz <= maxVal
-            : billableWeight > minVal && billableWeight <= maxVal;
-        }
-      } else if (range.includes("to")) {
-        const parts = range.match(/([\d.]+)\s*to\s*([\d.]+)/);
-        if (parts) {
-          const minVal = parseFloat(parts[1]);
-          const maxVal = parseFloat(parts[2]);
-          matches = range.includes("oz")
-            ? weightOz >= minVal && weightOz <= maxVal
-            : billableWeight >= minVal && billableWeight <= maxVal;
-        }
-      }
+      const matches = weightBandMatches(feeRow.weightRange, billableWeight);
 
       if (matches) {
-        feeNonPeak = feeRow.nonPeak;
+        // Pick the selling-price band when the row carries one. Auditing a
+        // $6.42 item against the $10-$50 column (or an $11 item against the
+        // Low-Price column) manufactures a variance that isn't real.
+        feeNonPeak = bandValue(feeRow, sellingPrice);
         feePeak = feeRow.peak;
+
+        // Bulky / extra-large: add the published per-pound surcharge. Amazon
+        // charges per whole-pound INTERVAL above the threshold, so a part
+        // pound counts as a full interval.
+        if (feeRow.surchargePerInterval != null) {
+          const above = feeRow.surchargeAboveLb ?? 1;
+          const step = feeRow.surchargeIntervalLb ?? 1;
+          const intervals = Math.ceil(Math.max(0, billableWeight - above) / step);
+          feeNonPeak += intervals * feeRow.surchargePerInterval;
+          feePeak += intervals * feeRow.surchargePerInterval;
+          usedPublishedFormula = true;
+        }
         break;
       }
     }
   }
 
   // Dynamic fee handling for tiers above the table.
-  if (normalizedTier === "large standard" && billableWeight > 3) {
+  if (!usedPublishedFormula && normalizedTier === "large standard" && billableWeight > 3) {
     const baseNonPeak = hazmat ? 6.61 : 6.15;
     const basePeak = hazmat ? 7.69 : 7.43;
     const extraWeight = billableWeight - 3;
@@ -240,7 +366,7 @@ export function calculateFBATierAndFee(
     feePeak = basePeak + intervals * 0.08;
   }
 
-  if (normalizedTier === "small bulky" && billableWeight > 1) {
+  if (!usedPublishedFormula && normalizedTier === "small bulky" && billableWeight > 1) {
     const baseNonPeak = hazmat ? 9.30 : 6.69;
     const basePeak = hazmat ? 10.07 : 7.69;
     const extraWeight = Math.max(0, billableWeight - 1);
@@ -248,7 +374,7 @@ export function calculateFBATierAndFee(
     feePeak = basePeak + extraWeight * 0.38;
   }
 
-  if (normalizedTier === "large bulky" && billableWeight > 1) {
+  if (!usedPublishedFormula && normalizedTier === "large bulky" && billableWeight > 1) {
     const baseNonPeak = hazmat ? 7.50 : 6.75;
     const basePeak = hazmat ? 8.27 : 7.75;
     const extraWeight = Math.max(0, billableWeight - 1);
@@ -256,7 +382,7 @@ export function calculateFBATierAndFee(
     feePeak = basePeak + extraWeight * 0.38;
   }
 
-  if (normalizedTier === "extra-large") {
+  if (!usedPublishedFormula && normalizedTier === "extra-large") {
     if (billableWeight <= 50) {
       const baseNonPeak = hazmat ? 27.67 : 25.56;
       const basePeak = hazmat ? 28.44 : 26.56;
@@ -284,7 +410,65 @@ export function calculateFBATierAndFee(
     }
   }
 
-  return { tier: sizeTier, feeNonPeak, feePeak, billableWeight, dimWeight, weightBasis };
+  // Ships in Product Packaging. Reported, NOT folded into feeNonPeak: Amazon
+  // takes the discount off the fee AFTER the fuel surcharge, as a flat amount
+  // per unit. Measured, not assumed - SEZ0101011 is billed $7.15, which is
+  // $7.13 x 1.035 - $0.23; discounting first gives ($7.13 - $0.23) x 1.035 =
+  // $7.14. Callers add `sipp.amount` once they've applied the surcharge.
+  // Only runs when the caller states certification; unknown changes nothing.
+  let sipp: SippEffect | undefined;
+  if (sippCertified !== undefined && feeNonPeak > 0) {
+    const find = (rows?: ReadonlyArray<FbaFeeRow>) =>
+      rows?.find(
+        (r) =>
+          r.tier === normalizedTier &&
+          // A general SIPP row must not discount a Dangerous Goods fee, or the
+          // other way round.
+          Boolean((r as { hazmat?: boolean }).hazmat) === hazmat &&
+          // Amazon sizes the packaging fee by DIMENSIONAL weight - the box it
+          // has to wrap - while discounts follow the usual shipping weight. A
+          // heavy but compact bulky unit pays a small packaging fee.
+          weightBandMatches(
+            r.weightRange,
+            r.weightBasis === "Dimensional weight" ? dimWeight : billableWeight,
+          ),
+      );
+    if (sippCertified) {
+      // A published SIPP card wins; the built-in table covers the gap until
+      // one is pasted, exactly as the built-in fee table does for fees.
+      const published = feeTableOverride?.sipp?.length ? feeTableOverride.sipp : null;
+      const row = find(published ?? (hazmat ? [] : BUILT_IN_SIPP_DISCOUNTS));
+      if (row) {
+        sipp = {
+          status: "discount",
+          amount: -bandValue(row, sellingPrice),
+          source: published ? "published" : "built-in",
+        };
+      } else if (normalizedTier === "small standard" || normalizedTier === "large standard") {
+        sipp = { status: "no_rate", amount: 0, source: published ? "published" : "built-in" };
+      } else {
+        // Bulky and extra-large SIPP units get a lower base rate instead of a
+        // discount (since 15 Jan 2026), so no row here is the expected case -
+        // not a gap in the table worth warning about.
+        sipp = { status: "none", amount: 0 };
+      }
+    } else {
+      const row = find(feeTableOverride?.nonSippPackaging);
+      sipp = row
+        ? { status: "packaging_fee", amount: bandValue(row, sellingPrice), source: "published" }
+        : { status: "none", amount: 0 };
+    }
+  }
+
+  return {
+    tier: sizeTier,
+    feeNonPeak,
+    feePeak,
+    billableWeight,
+    dimWeight,
+    weightBasis,
+    ...(sipp ? { sipp } : {}),
+  };
 }
 
 export interface ReferralFeeResult {
@@ -421,18 +605,11 @@ export function checkSippEligibility(lengthCm: number, widthCm: number, heightCm
 }
 
 /**
- * Compute the SIPP discount for an eligible product. Caller is responsible for
- * gating the call on `checkSippEligibility` + any user override.
+ * Amazon's US Ships in Product Packaging discounts, per certified unit, by tier
+ * and weight band. Shared by the P&L calculator (calculateSippDiscount) and the
+ * fee engine's fallback, so the figures live in one place.
  */
-export function calculateSippDiscount(sizeTier: string, weightOz: number): number {
-  const weightLb = weightOz / 16;
-  const normalizedTier = sizeTier
-    .toLowerCase()
-    .trim()
-    .replace("small standard-size", "small standard")
-    .replace("large standard-size", "large standard");
-
-  const table: ReadonlyArray<readonly [string, string, number]> = [
+const SIPP_DISCOUNT_TABLE: ReadonlyArray<readonly [string, string, number]> = [
     ["small standard", "2 oz or less", 0.04],
     ["small standard", "2+ to 4 oz", 0.04],
     ["small standard", "4+ to 6 oz", 0.05],
@@ -456,6 +633,39 @@ export function calculateSippDiscount(sizeTier: string, weightOz: number): numbe
     ["large standard", "3+ lb to 20 lb", 0.23],
     ["large bulky", "0 to 50 lb", 1.32],
   ];
+
+/**
+ * The same table as fee-engine rows, used when no published SIPP card has been
+ * pasted. Two deliberate differences:
+ *  - "3+ lb to 20 lb" is written "3+ to 20 lb", the spelling every other band
+ *    and the band matcher use; as written it matches nothing.
+ *  - The large bulky $1.32 row is left out. Amazon withdrew that discount on
+ *    15 Jan 2026 and bulky units now pay a packaging fee when NOT certified
+ *    instead, so applying it would under-state a bulky fee.
+ */
+export const BUILT_IN_SIPP_DISCOUNTS: ReadonlyArray<FbaFeeRow> = SIPP_DISCOUNT_TABLE.filter(
+  ([tier]) => tier !== "large bulky",
+).map(([tier, range, discount]) => ({
+  tier,
+  weightRange: range.replace(/^(\d+(?:\.\d+)?)\+ lb to /, "$1+ to "),
+  nonPeak: discount,
+  peak: discount,
+  weightBasis: tier === "small standard" ? "Unit weight" : "Greater of unit or dimensional weight",
+}));
+
+/**
+ * Compute the SIPP discount for an eligible product. Caller is responsible for
+ * gating the call on `checkSippEligibility` + any user override.
+ */
+export function calculateSippDiscount(sizeTier: string, weightOz: number): number {
+  const weightLb = weightOz / 16;
+  const normalizedTier = sizeTier
+    .toLowerCase()
+    .trim()
+    .replace("small standard-size", "small standard")
+    .replace("large standard-size", "large standard");
+
+  const table = SIPP_DISCOUNT_TABLE;
 
   for (const [tier, range, discount] of table) {
     if (tier !== normalizedTier) continue;

@@ -1,0 +1,421 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  aggregatePeriods,
+  comparePeriods,
+  skuPeriodRows,
+  type Granularity,
+  type InventoryMonthSummary,
+  type InventorySkuRow,
+  type PeriodSummary,
+} from "@platform/supply-chain-data";
+import { cn } from "@platform/ui";
+import type { MonthStatus } from "@/app/api/months/route";
+import { CostChart } from "@/components/CostChart";
+import { ShareChart } from "@/components/ShareChart";
+import { PeriodTable, type CompareTo } from "@/components/PeriodTable";
+import { SkuTable } from "@/components/SkuTable";
+import { AgePanel, type AgeNow } from "@/components/AgePanel";
+import { Change, changeOf } from "@/components/Change";
+import { Scorecard } from "@/components/Scorecard";
+import { Segmented } from "@/components/ui";
+import { Definitions } from "@/components/PeriodTable";
+import { monthLabel } from "@/lib/format";
+import { METRICS, periodLabel, type MetricKey } from "@/lib/metrics";
+
+type SourceState = "ready" | "scanning" | "failed" | "unavailable";
+
+interface Payload {
+  months: InventoryMonthSummary[];
+  skus: InventorySkuRow[];
+  status: MonthStatus[];
+  busy: boolean;
+  blocked: MonthStatus | null;
+  inventory: {
+    ledger: SourceState;
+    awd: SourceState;
+    inStock: SourceState;
+    aged: SourceState;
+    agedPending: string[];
+    snapshotDays: number;
+    ageNow: AgeNow | null;
+  };
+  error?: string;
+}
+
+const RANGES = [12, 24, "all"] as const;
+const POLL_MS = 20_000;
+
+const HEADLINE: MetricKey[][] = [
+  ["netSales", "supplyChainCost", "supplyChainShareOfSales", "fulfilmentPerUnit", "storageShareOfSales", "contributionShare"],
+  ["turnover", "daysOfInventory", "inventoryValue", "sellThrough", "excessShare", "gmroi"],
+];
+
+export default function Page() {
+  const [range, setRange] = useState<(typeof RANGES)[number]>("all");
+  // A quarter against the same quarter last year is the fair default for a
+  // seasonal business: long enough to smooth a month's noise, and judged
+  // against its own season.
+  const [granularity, setGranularity] = useState<Granularity>("quarter");
+  const [compare, setCompare] = useState<CompareTo>("yoy");
+  const [selected, setSelected] = useState<string | null>(null);
+  const [data, setData] = useState<Payload | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [pollTick, setPollTick] = useState(0);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/months?count=${range}`, { cache: "no-store" });
+      const j = (await res.json()) as Payload & { productNames?: Record<string, string> };
+      if (!res.ok || j.error) throw new Error(j.error ?? `HTTP ${res.status}`);
+      // Names come once per product; put them back on the rows.
+      const names = j.productNames ?? {};
+      j.skus = j.skus.map((r) => ({ ...r, productName: names[r.sku] ?? "" }));
+      setData(j);
+      setError(null);
+      lastFull.current = Date.now();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, [range]);
+  const lastFull = useRef(0);
+  const lastSignature = useRef<string | null>(null);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  // While history is still loading, ask the small status endpoint what has
+  // changed and fetch the full figures only when a month has finished (or
+  // every five minutes, for the slower inventory pulls). The gateway does the
+  // loading itself; the page only has to notice.
+  useEffect(() => {
+    if (!data?.busy && !error) return;
+    const t = setTimeout(async () => {
+      try {
+        const s = (await (await fetch("/api/status", { cache: "no-store" })).json()) as { cached?: number; current?: string | null };
+        const signature = `${s.cached}|${s.current}`;
+        const stale = Date.now() - lastFull.current > 5 * 60_000;
+        if (error || signature !== lastSignature.current || stale) {
+          lastSignature.current = signature;
+          await load();
+        } else {
+          // Nothing new: schedule the next look without re-rendering the page.
+          setPollTick((n) => n + 1);
+        }
+      } catch {
+        setPollTick((n) => n + 1);
+      }
+    }, POLL_MS);
+    return () => clearTimeout(t);
+  }, [data, error, load, pollTick]);
+
+  const feeReady = useMemo(
+    () => new Set(data?.status.filter((s) => s.fees === "ready").map((s) => s.month)),
+    [data],
+  );
+  const periods = useMemo(
+    () => (data ? aggregatePeriods(data.months, granularity, feeReady) : []),
+    [data, granularity, feeReady],
+  );
+  const monthly = useMemo(
+    () => (data ? aggregatePeriods(data.months, "month", feeReady) : []),
+    [data, feeReady],
+  );
+  const changes = useMemo(
+    () => (data ? comparePeriods(periods, data.months, feeReady) : new Map()),
+    [data, periods, feeReady],
+  );
+
+  // Default to the newest period whose costs are complete, storage included:
+  // the month just closed has no storage bill yet and would read as cheap.
+  const complete = periods.filter((p) => p.feeMonths === p.months.length);
+  const fallback =
+    complete.filter((p) => p.storageShareOfSales != null).at(-1) ?? complete.at(-1) ?? periods.at(-1) ?? null;
+  const current = periods.find((p) => p.key === selected) ?? fallback;
+  const base = current ? changes.get(current.key)?.[compare] ?? null : null;
+
+  const vsLabel = compare === "yoy" ? "YoY" : granularity === "month" ? "MoM" : granularity === "quarter" ? "QoQ" : "YoY";
+  const baseName = base ? periodLabel(base.key, base.granularity, true) : null;
+  const skuRows = useMemo(
+    () => (data && current ? skuPeriodRows(data.skus, current.months, base?.months ?? null) : []),
+    [data, current, base],
+  );
+  const names = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const r of data?.skus ?? []) if (r.productName) out[r.sku] = r.productName;
+    return out;
+  }, [data]);
+
+  const scanningNow = data?.status.find((s) => s.fees === "scanning")?.month ?? null;
+  const heliumMonths = useMemo(() => new Set(data?.status.filter((s) => s.source === "helium").map((s) => s.month)), [data]);
+  const unavailableMonths = useMemo(() => new Set(data?.status.filter((s) => s.fees === "unavailable").map((s) => s.month)), [data]);
+  const periodFromHelium = current ? current.months.every((m) => heliumMonths.has(m)) : false;
+  const waiting = data?.status.filter((s) => s.fees === "queued" || s.fees === "scanning").length ?? 0;
+  const loadingSources = data
+    ? ([
+        ["inventory ledger", data.inventory.ledger],
+        ["AWD shipments and orders", data.inventory.awd],
+        ["daily in-stock ledger", data.inventory.inStock],
+        ["aged-surcharge reports", data.inventory.aged],
+      ] as const).filter(([, st]) => st !== "ready")
+    : [];
+
+  return (
+    <main className="min-h-screen bg-background">
+      <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
+        <header className="mb-6 flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight">Supply chain</h1>
+            <p className="mt-1 text-sm text-muted-foreground">What FBA and AWD cost, against what the stock sold.</p>
+          </div>
+          {/* The comparison is chosen beside each heading that states it. */}
+          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+            <Segmented
+              label="Period length"
+              value={granularity}
+              options={[["month", "Month"], ["quarter", "Quarter"], ["year", "Year"]]}
+              onChange={(g) => {
+                setGranularity(g);
+                setSelected(null);
+              }}
+              className="w-full sm:w-auto"
+            />
+            <Segmented
+              label="History shown"
+              value={range}
+              options={RANGES.map((r) => [r, r === "all" ? "All" : `${r} mo`] as const)}
+              onChange={setRange}
+              className="w-full sm:w-auto"
+            />
+          </div>
+        </header>
+
+        {error && (
+          <div role="alert" className="mb-6 rounded-md border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm">
+            <p className="font-medium">Couldn&apos;t load the figures.</p>
+            <p className="mt-1 text-muted-foreground">
+              {/fetch/i.test(error)
+                ? "The app's server didn't answer. Start it (pnpm --filter @platform/supply-chain dev) and this page retries on its own."
+                : error}
+            </p>
+          </div>
+        )}
+        {!data && !error && (
+          <p role="status" className="text-sm text-muted-foreground">
+            Loading the figures…
+          </p>
+        )}
+
+        {data?.blocked && (
+          <div role="alert" className="mb-6 rounded-md border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm">
+            <p className="font-medium">Reading {monthLabel(data.blocked.month, "long")} failed, so the months behind it are on hold.</p>
+            <p className="mt-1 text-muted-foreground">{explain(data.blocked.error)}</p>
+            <button type="button" onClick={() => void load()} className="mt-2 min-h-11 rounded-md border border-border bg-background px-3 py-1 text-sm hover:bg-muted sm:min-h-0">
+              Retry
+            </button>
+          </div>
+        )}
+
+        {data && !data.blocked && (waiting > 0 || loadingSources.length > 0) && (
+          <p role="status" className="mb-6 text-sm text-muted-foreground">
+            {waiting > 0 &&
+              `${scanningNow ? `Reading ${monthLabel(scanningNow, "long")} from Amazon. ` : ""}${waiting} month${waiting === 1 ? "" : "s"} of fees still to read, about six minutes each; finished months are kept. `}
+            {loadingSources.map(([name, st]) => `${name}: ${st === "scanning" ? "loading" : st}`).join(" · ")}
+            {data.inventory.agedPending.length ? ` (${data.inventory.agedPending.length} months of aged surcharge to fetch)` : ""}
+          </p>
+        )}
+
+        {current && (
+          <section className="mb-12">
+            <h2 className="mb-1 text-xl font-semibold tracking-tight">Is the supply chain improving?</h2>
+            <div className="mb-2 flex flex-wrap items-center gap-2 text-sm">
+              <span className="font-medium">
+                {periodLabel(current.key, current.granularity, true)}
+                {current.toDate ? " to date" : ""}
+              </span>
+              <span className="text-muted-foreground">compared with</span>
+              <ComparePicker period={current} changes={changes} compare={compare} onChange={setCompare} />
+            </div>
+            <p className="mb-4 text-sm text-muted-foreground">
+              Measures you move, per unit or per dollar of stock so sales volume can't flatter them; in-stock rate is there so
+              a leaner inventory only counts if customers could still buy.
+            </p>
+            <Scorecard
+              current={current}
+              base={base}
+              currentName={periodLabel(current.key, current.granularity)}
+              baseName={base ? periodLabel(base.key, base.granularity) : null}
+              history={monthly}
+            />
+          </section>
+        )}
+
+        {current && (
+          <section className="mb-10">
+            <div className="mb-4 flex flex-wrap items-center gap-2 text-sm">
+              <span className="font-medium">
+                {periodLabel(current.key, current.granularity, true)}
+                {current.toDate ? " to date" : ""}
+              </span>
+              <span className="text-muted-foreground">compared with</span>
+              <ComparePicker period={current} changes={changes} compare={compare} onChange={setCompare} />
+            </div>
+            {HEADLINE.map((row, i) => (
+              <dl
+                key={i}
+                className={cn("grid grid-cols-2 gap-x-8 gap-y-5 sm:grid-cols-3 lg:grid-cols-6", i > 0 && "mt-6 border-t border-border pt-6")}
+              >
+                {row.map((k) => (
+                  <Stat key={k} p={current} base={base} k={k} />
+                ))}
+              </dl>
+            ))}
+            <Definitions metrics={HEADLINE.flat().map((k) => METRICS[k])} />
+          </section>
+        )}
+
+        {complete.length > 0 && (
+          <section className="mb-10 grid gap-10 lg:grid-cols-2">
+            <div>
+              <h2 className="mb-3 font-medium">Supply-chain cost</h2>
+              <CostChart
+                periods={complete}
+                bases={complete.map((p) => changes.get(p.key)?.[compare] ?? null)}
+                baseLabel={compare === "yoy" ? "Same period last year" : "Prior period"}
+              />
+            </div>
+            <div>
+              <h2 className="mb-3 font-medium">Cost as a share of net sales</h2>
+              <ShareChart periods={complete} />
+            </div>
+          </section>
+        )}
+
+        {data && (
+          <section className="mb-10">
+            <h2 className="mb-1 font-medium">By {granularity}</h2>
+            <p className="mb-3 text-sm text-muted-foreground">
+              Changes are {compare === "yoy" ? "against the same months a year earlier" : `against the prior ${granularity}`}, like
+              for like. Storage is filed under the month it was for. FBA stock is Amazon&apos;s ledger; AWD stock is worked back
+              from today&apos;s. Click a row to see its SKUs.
+            </p>
+            <PeriodTable
+              periods={periods}
+              changes={changes}
+              compare={compare}
+              selected={current?.key ?? null}
+              onSelect={setSelected}
+              scanning={scanningNow}
+              heliumMonths={heliumMonths}
+              unavailableMonths={unavailableMonths}
+            />
+          </section>
+        )}
+
+        {current && (
+          <section className="mb-10">
+            <h2 className="mb-1 font-medium">
+              SKUs in {periodLabel(current.key, current.granularity, true)}
+              {baseName ? <span className="font-normal text-muted-foreground"> · changes vs {baseName}</span> : null}
+            </h2>
+            <p className="mb-3 text-sm text-muted-foreground">
+              Sales and fulfilment fees per order line; FBA storage from Amazon&apos;s per-ASIN report; AWD processing and transport
+              traced to the shipments and orders that moved each SKU, AWD storage shared by units held.
+            </p>
+            {periodFromHelium ? (
+              <p className="text-sm text-muted-foreground">
+                No per-SKU detail for this period: it is older than Amazon&apos;s finance API keeps (730 days), and the Helium 10
+                history it comes from is account totals only.
+              </p>
+            ) : (
+              <SkuTable rows={skuRows} vsLabel={vsLabel} />
+            )}
+          </section>
+        )}
+
+        {data && (
+          <section>
+            <h2 className="mb-1 font-medium">Inventory age</h2>
+            <AgePanel ageNow={data.inventory.ageNow} days={data.inventory.snapshotDays} names={names} />
+          </section>
+        )}
+      </div>
+    </main>
+  );
+}
+
+/**
+ * The comparison, chosen where it is stated: each option names the period it
+ * means ("July 2026", "August 2025"), so nobody has to work out what "prior"
+ * points at. An option with no data says so instead of offering an empty choice.
+ */
+function ComparePicker({
+  period,
+  changes,
+  compare,
+  onChange,
+}: {
+  period: PeriodSummary;
+  changes: Map<string, { prev: PeriodSummary | null; yoy: PeriodSummary | null }>;
+  compare: CompareTo;
+  onChange: (c: CompareTo) => void;
+}) {
+  const c = changes.get(period.key);
+  const g = period.granularity;
+  const opts: Array<[CompareTo, string, PeriodSummary | null | undefined]> =
+    g === "year"
+      ? [["yoy", "last year", c?.yoy]]
+      : [
+          ["prev", g === "month" ? "prior month" : "prior quarter", c?.prev],
+          ["yoy", "same period last year", c?.yoy],
+        ];
+  return (
+    <div role="group" aria-label="Compare with" className="flex flex-wrap rounded-md border border-border p-0.5">
+      {opts.map(([key, kind, base]) => (
+        <button
+          key={key}
+          type="button"
+          aria-pressed={compare === key || g === "year"}
+          onClick={() => onChange(key)}
+          className={cn(
+            "min-h-11 rounded px-3 whitespace-nowrap sm:min-h-0 sm:py-1",
+            compare === key || g === "year" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted",
+          )}
+        >
+          {base ? periodLabel(base.key, base.granularity, true) : `${kind} (no data)`}
+          <span className="ml-1 text-xs opacity-75">
+            <span aria-hidden="true">{kind === "same period last year" || kind === "last year" ? "YoY" : g === "month" ? "MoM" : "QoQ"}</span>
+            <span className="sr-only">, {kind}</span>
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function Stat({ p, base, k }: { p: PeriodSummary; base: PeriodSummary | null; k: MetricKey }) {
+  const m = METRICS[k];
+  return (
+    <div>
+      <dt className="text-xs text-muted-foreground">{m.label}</dt>
+      <dd className="mt-1 text-2xl font-semibold tabular-nums tracking-tight">{m.format(p[k] as number | null)}</dd>
+      <dd className="mt-0.5 min-h-4">
+        <Change metric={m} value={changeOf(m, p, base)} />
+      </dd>
+    </div>
+  );
+}
+
+/** Amazon's errors, in words that say what to do. */
+function explain(error?: string): string {
+  if (!error) return "No reason was given.";
+  if (/invalid_client|Client authentication failed/i.test(error)) {
+    return "Amazon rejected the gateway's Login with Amazon client credentials (invalid_client). The client secret has most likely expired: rotate it in the Seller Central developer console, put the new one in seller-central-api/.env as AMAZON_CLIENT_SECRET, and restart the gateway.";
+  }
+  if (/invalid_grant/i.test(error)) {
+    return "Amazon rejected the gateway's refresh token (invalid_grant). Re-authorise the app in Seller Central and update AMAZON_REFRESH_TOKEN in seller-central-api/.env.";
+  }
+  return error;
+}

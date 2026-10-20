@@ -18,6 +18,97 @@ importers:
         specifier: ^5.7.3
         version: 5.9.3
 
+  apps/fba-fee-auditor:
+    dependencies:
+      '@platform/calc':
+        specifier: workspace:*
+        version: link:../../packages/calc
+      '@platform/db-types':
+        specifier: workspace:*
+        version: link:../../packages/db-types
+      '@platform/supply-chain-data':
+        specifier: workspace:*
+        version: link:../../packages/supply-chain-data
+      '@platform/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
+      '@supabase/supabase-js':
+        specifier: ^2.53.0
+        version: 2.105.3
+      '@tanstack/react-query':
+        specifier: ^5.56.2
+        version: 5.100.9(react@18.3.1)
+      '@types/nodemailer':
+        specifier: ^8.0.1
+        version: 8.0.1
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      lucide-react:
+        specifier: ^0.462.0
+        version: 0.462.0(react@18.3.1)
+      next:
+        specifier: ^15.1.6
+        version: 15.5.15(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      next-themes:
+        specifier: ^0.3.0
+        version: 0.3.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      nodemailer:
+        specifier: ^9.0.3
+        version: 9.0.3
+      react:
+        specifier: ^18.3.1
+        version: 18.3.1
+      react-dom:
+        specifier: ^18.3.1
+        version: 18.3.1(react@18.3.1)
+      sonner:
+        specifier: ^1.5.0
+        version: 1.7.4(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      tailwind-merge:
+        specifier: ^2.5.2
+        version: 2.6.1
+    devDependencies:
+      '@platform/config':
+        specifier: workspace:*
+        version: link:../../packages/config
+      '@types/node':
+        specifier: ^22.5.5
+        version: 22.19.17
+      '@types/react':
+        specifier: ^18.3.3
+        version: 18.3.28
+      '@types/react-dom':
+        specifier: ^18.3.0
+        version: 18.3.7(@types/react@18.3.28)
+      autoprefixer:
+        specifier: ^10.4.20
+        version: 10.5.0(postcss@8.5.14)
+      eslint:
+        specifier: ^9.9.0
+        version: 9.39.4(jiti@1.21.7)
+      eslint-config-next:
+        specifier: ^15.1.6
+        version: 15.5.15(eslint@9.39.4(jiti@1.21.7))(typescript@5.9.3)
+      postcss:
+        specifier: ^8.4.47
+        version: 8.5.14
+      rimraf:
+        specifier: ^6.0.1
+        version: 6.1.3
+      tailwindcss:
+        specifier: ^3.4.11
+        version: 3.4.19
+      tailwindcss-animate:
+        specifier: ^1.0.7
+        version: 1.0.7(tailwindcss@3.4.19)
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.4(@types/node@22.19.17)(jiti@1.21.7)
+
   apps/pnl-calculator:
     dependencies:
       '@hookform/resolvers':
@@ -130,6 +221,61 @@ importers:
         specifier: ^3.2.4
         version: 3.2.4(@types/node@22.19.17)(jiti@1.21.7)
 
+  apps/supply-chain:
+    dependencies:
+      '@platform/supply-chain-data':
+        specifier: workspace:*
+        version: link:../../packages/supply-chain-data
+      '@platform/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      next:
+        specifier: ^15.1.6
+        version: 15.5.15(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      react:
+        specifier: ^18.3.1
+        version: 18.3.1
+      react-dom:
+        specifier: ^18.3.1
+        version: 18.3.1(react@18.3.1)
+      tailwind-merge:
+        specifier: ^2.5.2
+        version: 2.6.1
+    devDependencies:
+      '@platform/config':
+        specifier: workspace:*
+        version: link:../../packages/config
+      '@types/node':
+        specifier: ^22.5.5
+        version: 22.19.17
+      '@types/react':
+        specifier: ^18.3.3
+        version: 18.3.28
+      '@types/react-dom':
+        specifier: ^18.3.0
+        version: 18.3.7(@types/react@18.3.28)
+      autoprefixer:
+        specifier: ^10.4.20
+        version: 10.5.0(postcss@8.5.14)
+      postcss:
+        specifier: ^8.4.47
+        version: 8.5.14
+      rimraf:
+        specifier: ^6.0.1
+        version: 6.1.3
+      tailwindcss:
+        specifier: ^3.4.11
+        version: 3.4.19
+      tailwindcss-animate:
+        specifier: ^1.0.7
+        version: 1.0.7(tailwindcss@3.4.19)
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+
   packages/calc:
     devDependencies:
       '@platform/config':
@@ -183,6 +329,24 @@ importers:
       typescript:
         specifier: ^5.7.3
         version: 5.9.3
+
+  packages/supply-chain-data:
+    devDependencies:
+      '@platform/config':
+        specifier: workspace:*
+        version: link:../config
+      '@types/node':
+        specifier: ^22.5.5
+        version: 22.19.17
+      rimraf:
+        specifier: ^6.0.1
+        version: 6.1.3
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.4(@types/node@22.19.17)(jiti@1.21.7)
 
   packages/ui:
     dependencies:
@@ -1809,6 +1973,9 @@ packages:
   '@types/node@22.19.17':
     resolution: {integrity: sha512-wGdMcf+vPYM6jikpS/qhg6WiqSV/OhG+jeeHT/KlVqxYfD40iYJf9/AE1uQxVWFvU7MipKRkRv8NSHiCGgPr8Q==}
 
+  '@types/nodemailer@8.0.1':
+    resolution: {integrity: sha512-PxpaInm8V1JQDd4j0ds5HfvWQk8JupS1C0Picb96QJsrrRDjBH+DlK7L4ZdNSqNULhiZRQHc40nLVShaGxXAMw==}
+
   '@types/prop-types@15.7.15':
     resolution: {integrity: sha512-F6bEyamV9jKGAFBEmlQnesRPGOQqS2+Uwi0Em15xenOxHaf2hv6L8YCVn3rPdPJOiJfPiCnLIRyvwVaqMY3MIw==}
 
@@ -3047,6 +3214,10 @@ packages:
 
   node-releases@2.0.38:
     resolution: {integrity: sha512-3qT/88Y3FbH/Kx4szpQQ4HzUbVrHPKTLVpVocKiLfoYvw9XSGOX2FmD2d6DrXbVYyAQTF2HeF6My8jmzx7/CRw==}
+
+  nodemailer@9.0.3:
+    resolution: {integrity: sha512-n+YP+NKwR5zRWa60k3GiQ6Q3B4KXCoAw40dAKeCtYn020iNN74aWK2liXIC3ZEATeGql7we3tE3t8QwhY0eskw==}
+    engines: {node: '>=6.0.0'}
 
   normalize-path@3.0.0:
     resolution: {integrity: sha512-6eZs5Ls3WtCisHWp9S2GUy8dqkpGi4BVSz3GaqiE6ezub0512ESztXUwUB6C6IKbQkY2Pnb/mD4WYojCRwcwLA==}
@@ -5084,6 +5255,10 @@ snapshots:
     dependencies:
       undici-types: 6.21.0
 
+  '@types/nodemailer@8.0.1':
+    dependencies:
+      '@types/node': 22.19.17
+
   '@types/prop-types@15.7.15': {}
 
   '@types/react-dom@18.3.7(@types/react@18.3.28)':
@@ -6475,6 +6650,8 @@ snapshots:
       semver: 6.3.1
 
   node-releases@2.0.38: {}
+
+  nodemailer@9.0.3: {}
 
   normalize-path@3.0.0: {}
 
