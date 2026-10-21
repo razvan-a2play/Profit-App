@@ -126,6 +126,16 @@ describe("price per unit", () => {
     expect(read.overstockCost - read.overstockStorage).toBeCloseTo(5, 2);
     expect(unread.overstockStorage).toBeCloseTo(read.overstockStorage, 2);
   });
+
+  it("uses the account's aged total where the per-SKU report doesn't reach", () => {
+    const rows = ["2026-06", "2026-07", "2026-08"].map((m) => row(m, { unitsShipped: 310, avgUnitsHeld: 1200, fbaStorage: 30, agedSurcharge: null }));
+    const bare = storageVsTarget(rows, 60, "fba").months[0];
+    const filled = storageVsTarget(rows, 60, "fba", { "2026-06": 40 }).months[0];
+    expect(filled.agedSource).toBe("account");
+    expect(filled.agedSurcharge).toBe(40);
+    expect(filled.overstockCost).toBeCloseTo(bare.overstockCost + 40, 2);
+    expect(storageVsTarget(rows, 60, "awd", { "2026-06": 40 }).months[0]?.agedSurcharge ?? 0).toBe(0);
+  });
 });
 
 describe("per channel", () => {

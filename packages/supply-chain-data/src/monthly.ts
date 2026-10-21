@@ -185,7 +185,9 @@ export function buildMonthlyReport(i: MonthlyInputs): MonthlyReport {
               ? awdStorageFor
               : null;
       if (!bucket) continue;
-      const m = storageMonthOf(c, posted);
+      // The aged surcharge is assessed mid-month and posts that month: Amazon's
+      // per-SKU aged report for a month matches the charges posted in it.
+      const m = bucket === agedFor ? posted : storageMonthOf(c, posted);
       bucket.set(m, (bucket.get(m) ?? 0) + (awd ?? c.amount));
     }
   }
@@ -297,7 +299,7 @@ export function buildMonthlyReport(i: MonthlyInputs): MonthlyReport {
     const estimate = costs?.storage?.ready ? costs.storage.totals?.fee ?? null : null;
     const fbaStorage = invoiced ? fbaStorageFor.get(month) ?? 0 : estimate;
     const fbaStorageSource: StorageSource | null = invoiced ? "billed" : estimate != null ? "estimate" : null;
-    const agedSurcharge = invoiced || agedFor.has(month) ? agedFor.get(month) ?? 0 : null;
+    const agedSurcharge = billed || agedFor.has(month) ? agedFor.get(month) ?? 0 : null;
     const awdStorage = invoiced || awdStorageFor.has(month) ? awdStorageFor.get(month) ?? 0 : null;
     const awdProcessing = group("awd_receiving");
     const awdTransport = group("awd_transportation");

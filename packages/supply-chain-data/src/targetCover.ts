@@ -67,8 +67,10 @@ export interface CoverMonth {
   overstockCost: number;
   /** The same leaving the aged surcharge out: comparable with months whose aged report is unread. */
   overstockStorage: number;
-  /** Every SKU's aged surcharge report has been read. */
+  /** The month's aged surcharge is known: from every SKU's report, or the account total. */
   agedKnown: boolean;
+  /** Where it came from: Amazon's per-SKU aged report, or the account's payments data. */
+  agedSource: "sku" | "account" | null;
   /** Storage saved where stock ran below the target (with the stockout risk that brings). */
   leanSaving: number;
   /** overstockCost − leanSaving. */
@@ -164,7 +166,18 @@ function channelInputs(r: InventorySkuRow, channel: CoverChannel): { held: numbe
   return { held: fbaHeld + (r.awdUnitsAvg ?? 0), storage: r.fbaStorage + (r.awdStorage ?? 0), aged: r.agedSurcharge ?? 0, agedKnown: r.agedSurcharge != null };
 }
 
-export function storageVsTarget(rows: InventorySkuRow[], targetDays = 60, channel: CoverChannel = "total"): CoverReport {
+/**
+ * `agedByMonth` is the account's aged surcharge per month from the payments
+ * data. Amazon's per-SKU aged report only goes back about a year; for older
+ * months the account total stands in, all of it counted as excess (as the
+ * per-SKU surcharge is), so years can be compared on the same footing.
+ */
+export function storageVsTarget(
+  rows: InventorySkuRow[],
+  targetDays = 60,
+  channel: CoverChannel = "total",
+  agedByMonth: Record<string, number | null> = {},
+): CoverReport {
   // Months with ledger shipments, and each SKU's shipments by month.
   const knownMonths = new Set(rows.filter((r) => r.unitsShipped != null).map((r) => r.month));
   const shipped = new Map<string, Map<string, number>>();
@@ -223,17 +236,23 @@ export function storageVsTarget(rows: InventorySkuRow[], targetDays = 60, channe
     months: months.map((m) => {
       const rs = out.filter((r) => r.month === m);
       const demand = sum(rs.map((r) => r.dailyDemand));
-      const over = sum(rs.filter((r) => r.excessCost > 0).map((r) => r.excessCost));
+      const skuAged = sum(rs.map((r) => r.agedSurcharge));
+      const skuKnown = rs.every((r) => r.agedKnown);
+      const account = channel !== "awd" && !skuKnown ? agedByMonth[m] ?? null : null;
+      // The account total covers what the unread SKU reports would have added.
+      const extra = account != null ? Math.max(account - skuAged, 0) : 0;
+      const over = sum(rs.filter((r) => r.excessCost > 0).map((r) => r.excessCost)) + extra;
       const lean = -sum(rs.filter((r) => r.excessCost < 0).map((r) => r.excessCost));
       return {
         month: m,
         skus: rs.length,
         actualStorage: round(sum(rs.map((r) => r.actualStorage))),
-        agedSurcharge: round(sum(rs.map((r) => r.agedSurcharge))),
+        agedSurcharge: round(skuAged + extra),
         idealStorage: round(sum(rs.map((r) => r.idealStorage))),
         overstockCost: round(over),
         overstockStorage: round(sum(rs.map((r) => Math.max(r.actualStorage - r.idealStorage, 0)))),
-        agedKnown: rs.every((r) => r.agedKnown),
+        agedKnown: skuKnown || account != null,
+        agedSource: skuKnown ? "sku" : account != null ? "account" : null,
         leanSaving: round(lean),
         net: round(over - lean),
         coverDays: demand > 0 ? Math.round(sum(rs.map((r) => r.unitsHeld)) / demand) : null,

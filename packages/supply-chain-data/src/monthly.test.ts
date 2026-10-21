@@ -62,6 +62,7 @@ describe("buildMonthlyReport", () => {
         charge("FBAStorageFee", "fba_storage", 900), // July's storage
         charge("AmazonUpstreamProcessingFee", "awd_receiving", 50, "IB_2026-08-03_STAR-X"),
         charge("AmazonUpstreamStorageTransportationFee", "awd_transportation", 120, "repl-1"),
+        charge("FBALongTermStorageFee", "fba_storage", 30), // August's aged surcharge, assessed mid-month
       ],
       { a1: sales(100, 2000, 600), B2: sales(10, 500, 80, 50) },
     ),
@@ -71,7 +72,7 @@ describe("buildMonthlyReport", () => {
     billed: billed(
       [
         charge("FBAStorageFee", "fba_storage", 1000), // August's storage
-        charge("FBALongTermStorageFee", "fba_storage", 30),
+        charge("FBALongTermStorageFee", "fba_storage", 45), // September's: not August's
         charge("STARStorageFee", "awd_storage", 400, "US-2026-08-A25DETU405FE64"),
       ],
       {},
@@ -86,6 +87,8 @@ describe("buildMonthlyReport", () => {
   });
   const m = report.months[0];
 
+  // Storage is billed a month in arrears; the aged surcharge posts in the month
+  // it was assessed (Amazon's per-SKU aged report for a month matches it).
   it("takes a month's storage from the invoice posted the month after", () => {
     expect(m.fbaStorage).toBe(1000);
     expect(m.fbaStorageSource).toBe("billed");
