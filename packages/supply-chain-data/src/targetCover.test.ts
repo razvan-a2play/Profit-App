@@ -100,6 +100,21 @@ describe("price per unit", () => {
     expect(bulky.excessCost).toBeCloseTo(4 * small.excessCost, 1);
     expect(bulky.cuftPerUnit).toBe(0.2);
   });
+
+  it("prices the target as its cubic feet at the rate Amazon charged", () => {
+    // 1,200 units × 0.1 cu ft = 120 cu ft billed $93.60, so $0.78 a cu ft.
+    const r = storageVsTarget(
+      ["2026-06", "2026-07", "2026-08"].map((m) => row(m, { unitsShipped: 310, avgUnitsHeld: 1200, fbaStorage: 93.6, cuftPerUnit: 0.1 })),
+      60,
+      "fba",
+    );
+    const june = r.rows.find((x) => x.month === "2026-06")!;
+    expect(june.cuftHeld).toBe(120);
+    expect(june.ratePerCuft).toBe(0.78);
+    expect(june.cuftTarget).toBeCloseTo(june.targetUnits * 0.1, 0);
+    expect(june.idealStorage).toBeCloseTo(june.cuftTarget! * 0.78, 0);
+    expect(r.months[0].cuftHeld).toBe(120);
+  });
 });
 
 describe("per channel", () => {

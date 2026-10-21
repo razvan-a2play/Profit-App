@@ -33,6 +33,14 @@ export interface CoverRow {
   cuftPerUnit: number | null;
   /** What one unit cost to store for the month: storage ÷ units held. Bulkier units cost more. */
   pricePerUnitMonth: number | null;
+  /** Cubic feet the stock held took up: units held × cu ft per unit. */
+  cuftHeld: number | null;
+  /** Cubic feet the target stock would have taken up. */
+  cuftTarget: number | null;
+  /** What Amazon charged per cubic foot for the month: storage ÷ cubic feet held. */
+  ratePerCuft: number | null;
+  /** True when running lean was capped at MAX_SCALE × the storage charged. */
+  capped: boolean;
   /** Units per day the target is sized on. */
   dailyDemand: number;
   /** "forward" (the 60 days that followed) or "trailing" (latest months). */
@@ -61,6 +69,12 @@ export interface CoverMonth {
   net: number;
   /** Demand-weighted days of cover actually held. */
   coverDays: number | null;
+  /** Units held and units the target needed, summed over the SKUs judged. */
+  unitsHeld: number;
+  targetUnits: number;
+  /** Cubic feet held and needed, over the SKUs whose cu ft per unit is known. */
+  cuftHeld: number;
+  cuftTarget: number;
   /** Share of the month's demand on SKUs sized on trailing demand. */
   trailingShare: number;
 }
@@ -167,14 +181,20 @@ export function storageVsTarget(rows: InventorySkuRow[], targetDays = 60, channe
     // its target — launching, or out of stock — would scale a noisy price per
     // unit many times over; the ideal is capped at MAX_SCALE × actual.
     const ideal = held > 0 ? storage * Math.min(target / held, MAX_SCALE) : 0;
+    const cuft = channel === "awd" ? null : r.cuftPerUnit ?? null;
+    const cuftHeld = cuft ? held * cuft : null;
     out.push({
       month: r.month,
       sku: r.sku,
       asin: r.asin,
       productName: r.productName,
       unitsHeld: Math.round(held),
-      cuftPerUnit: channel === "awd" ? null : r.cuftPerUnit ?? null,
+      cuftPerUnit: cuft,
       pricePerUnitMonth: held > 0 ? round(storage / held, 4) : null,
+      cuftHeld: cuftHeld != null ? round(cuftHeld, 1) : null,
+      cuftTarget: cuft ? round(target * cuft, 1) : null,
+      ratePerCuft: cuftHeld ? round(storage / cuftHeld, 3) : null,
+      capped: held > 0 && target / held > MAX_SCALE,
       dailyDemand: round(d.rate, 2),
       demandBasis: d.basis,
       targetUnits: Math.round(target),
@@ -206,6 +226,10 @@ export function storageVsTarget(rows: InventorySkuRow[], targetDays = 60, channe
         leanSaving: round(lean),
         net: round(over - lean),
         coverDays: demand > 0 ? Math.round(sum(rs.map((r) => r.unitsHeld)) / demand) : null,
+        unitsHeld: sum(rs.map((r) => r.unitsHeld)),
+        targetUnits: sum(rs.map((r) => r.targetUnits)),
+        cuftHeld: round(sum(rs.map((r) => r.cuftHeld ?? 0)), 1),
+        cuftTarget: round(sum(rs.map((r) => r.cuftTarget ?? 0)), 1),
         trailingShare: demand > 0 ? round(sum(rs.filter((r) => r.demandBasis === "trailing").map((r) => r.dailyDemand)) / demand, 4) : 0,
       };
     }),
