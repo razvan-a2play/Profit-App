@@ -6,6 +6,9 @@ import { count, money, money2, monthLabel } from "@/lib/format";
 import { periodLabel } from "@/lib/metrics";
 import { DeltaArrow, TONE } from "./ui";
 
+/** SKUs listed before "show all". */
+const SKU_ROWS = 15;
+
 const CHANNEL = {
   fba: { stock: "FBA stock", storage: "FBA storage", id: "fba" },
   awd: { stock: "AWD stock", storage: "AWD storage", id: "awd" },
@@ -21,12 +24,15 @@ export function CoverSection({
   rows,
   period,
   base = null,
+  agedByMonth = {},
   channel = "total",
 }: {
   rows: InventorySkuRow[];
   period: PeriodSummary;
   /** The comparison period (same months last year, or the prior period). */
   base?: PeriodSummary | null;
+  /** The account's aged surcharge per month, standing in where Amazon's per-SKU aged report doesn't reach. */
+  agedByMonth?: Record<string, number | null>;
   channel?: CoverChannel;
 }) {
   const c = CHANNEL[channel];
@@ -35,6 +41,8 @@ export function CoverSection({
   // AWD has no per-unit cubic feet from Amazon, so its target is priced per unit only.
   const cubic = channel !== "awd";
   const [target, setTarget] = useState(60);
+  const [allMonths, setAllMonths] = useState(false);
+  const [allSkus, setAllSkus] = useState(false);
   useEffect(() => {
     try {
       const saved = Number(localStorage.getItem(storeKey));
@@ -52,7 +60,7 @@ export function CoverSection({
     }
   };
 
-  const report = useMemo(() => storageVsTarget(rows, target, channel), [rows, target, channel]);
+  const report = useMemo(() => storageVsTarget(rows, target, channel, agedByMonth), [rows, target, channel, agedByMonth]);
   const inPeriod = new Set(period.months);
   const months = report.months.filter((m) => inPeriod.has(m.month));
   const total = (k: "actualStorage" | "agedSurcharge" | "idealStorage" | "overstockCost" | "leanSaving" | "net") =>
@@ -80,7 +88,8 @@ export function CoverSection({
       cur.n += 1;
       by.set(r.sku, cur);
     }
-    return [...by.values()].sort((a, b) => b.excess - a.excess);
+    // Biggest effect first, lost or saved, so the short list holds both ends.
+    return [...by.values()].sort((a, b) => Math.abs(b.excess) - Math.abs(a.excess));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [report, period.key]);
 
@@ -151,6 +160,14 @@ export function CoverSection({
 
           {base ? <Comparison report={report.months} period={period} base={base} target={target} withAged={withAged} cubic={cubic} /> : null}
 
+          <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+            <h3 className="text-sm font-medium">{allMonths ? "Every month" : `Months in ${name}`}</h3>
+            {report.months.length > months.length ? (
+              <button type="button" onClick={() => setAllMonths((v) => !v)} className="min-h-11 text-sm text-primary hover:underline sm:min-h-0">
+                {allMonths ? `Only ${name}` : `Show all ${report.months.length} months`}
+              </button>
+            ) : null}
+          </div>
           <div className="mb-6 overflow-x-auto rounded-lg border border-border">
             <table className="w-full text-sm">
               <thead className="bg-muted text-xs text-muted-foreground">
@@ -170,8 +187,8 @@ export function CoverSection({
                 </tr>
               </thead>
               <tbody>
-                {[...report.months].reverse().map((m) => (
-                  <tr key={m.month} className={inPeriod.has(m.month) ? "border-t border-border bg-primary-light" : "border-t border-border"}>
+                {[...(allMonths ? report.months : months)].reverse().map((m) => (
+                  <tr key={m.month} className={allMonths && inPeriod.has(m.month) ? "border-t border-border bg-primary-light" : "border-t border-border"}>
                     <th scope="row" className="px-3 py-2 text-left font-normal whitespace-nowrap">
                       {monthLabel(m.month, "long")}
                       {m.trailingShare > 0.5 ? <span className="block text-xs text-muted-foreground">trailing demand</span> : null}
@@ -197,7 +214,7 @@ export function CoverSection({
             </table>
           </div>
 
-          <h3 className="mb-2 text-sm font-medium">SKUs in {name}, most costly excess first ({c.stock})</h3>
+          <h3 className="mb-2 text-sm font-medium">SKUs in {name}, biggest gap from target first ({c.stock})</h3>
           <div className="overflow-x-auto rounded-lg border border-border">
             <table className="w-full text-sm">
               <thead className="bg-muted text-xs text-muted-foreground">
@@ -223,7 +240,7 @@ export function CoverSection({
                 </tr>
               </thead>
               <tbody>
-                {skus.map((s) => (
+                {(allSkus ? skus : skus.slice(0, SKU_ROWS)).map((s) => (
                   <tr key={s.sku} className="border-t border-border">
                     <th scope="row" className="max-w-[20rem] px-3 py-2 text-left font-normal">
                       <span className="block font-medium">{s.sku}</span>
@@ -256,6 +273,11 @@ export function CoverSection({
               </tbody>
             </table>
           </div>
+          {skus.length > SKU_ROWS ? (
+            <button type="button" onClick={() => setAllSkus((v) => !v)} className="mt-2 min-h-11 text-sm text-primary hover:underline sm:min-h-0">
+              {allSkus ? `Only the ${SKU_ROWS} biggest` : `Show all ${skus.length} SKUs`}
+            </button>
+          ) : null}
           <details className="mt-3 text-sm">
             <summary className="cursor-pointer text-muted-foreground hover:text-foreground">How this is worked out</summary>
             <div className="mt-2 space-y-1 text-muted-foreground">
@@ -448,6 +470,9 @@ function Comparison({
           ? ` Left out: ${dropped.map((p) => `${monthLabel(p.cur)} (${byMonth.has(p.prev) ? monthLabel(p.cur) : monthLabel(p.prev)} has no per-SKU storage report)`).join(", ")}.`
           : ""}
         {mixedBasis ? " Months marked trailing demand are sized on past sales, so they read less exactly." : ""}
+        {withAged && both.some((p) => byMonth.get(p.prev)!.agedSource === "account" || byMonth.get(p.cur)!.agedSource === "account")
+          ? " Aged surcharge before Amazon's per-SKU aged report begins (it keeps about a year) is the account total from the payments data."
+          : ""}
       </p>
       <div className="overflow-x-auto rounded-lg border border-border">
         <table className="w-full text-sm">

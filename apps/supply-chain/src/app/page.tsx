@@ -48,6 +48,15 @@ interface Payload {
 }
 
 const RANGES = [12, 24, "all"] as const;
+
+const TABS = [
+  ["overview", "Overview"],
+  ["storage", "Storage vs target"],
+  ["periods", "By period"],
+  ["skus", "SKUs"],
+  ["age", "Inventory age"],
+] as const;
+type Tab = (typeof TABS)[number][0];
 const POLL_MS = 20_000;
 
 const HEADLINE: MetricKey[][] = [
@@ -67,6 +76,18 @@ export default function Page() {
   const [data, setData] = useState<Payload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pollTick, setPollTick] = useState(0);
+  const [tab, setTab] = useState<Tab>("overview");
+  const [channel, setChannel] = useState<"fba" | "awd">("fba");
+
+  // The tab lives in the address (#storage) so a reload or a shared link opens it.
+  useEffect(() => {
+    const h = window.location.hash.slice(1);
+    if (TABS.some(([k]) => k === h)) setTab(h as Tab);
+  }, []);
+  const chooseTab = (t: Tab) => {
+    setTab(t);
+    window.history.replaceState(null, "", `#${t}`);
+  };
 
   const load = useCallback(async () => {
     try {
@@ -150,6 +171,10 @@ export default function Page() {
 
   const vsLabel = compare === "yoy" ? "YoY" : granularity === "month" ? "MoM" : granularity === "quarter" ? "QoQ" : "YoY";
   const baseName = base ? periodLabel(base.key, base.granularity, true) : null;
+  const agedByMonth = useMemo(
+    () => Object.fromEntries((data?.months ?? []).map((m) => [m.month, m.agedSurcharge])),
+    [data],
+  );
   const skuRows = useMemo(
     () => (data && current ? skuPeriodRows(data.skus, current.months, base?.months ?? null) : []),
     [data, current, base],
@@ -179,46 +204,13 @@ export default function Page() {
   return (
     <main className="min-h-screen bg-background">
       <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
-        <header className="mb-6 flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Supply chain</h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {isCA
-                ? "Amazon.ca: what FBA cost, against what the stock sold, in Canadian dollars."
-                : "Amazon.com: what FBA and AWD cost, against what the stock sold, in US dollars."}
-            </p>
-          </div>
-          {/* The comparison is chosen beside each heading that states it. */}
-          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
-            <Segmented
-              label="Marketplace"
-              value={market}
-              options={[["US", "US"], ["CA", "Canada"]]}
-              onChange={(m) => {
-                setMarket(m);
-                setSelected(null);
-                setData(null);
-              }}
-              className="w-full sm:w-auto"
-            />
-            <Segmented
-              label="Period length"
-              value={granularity}
-              options={[["month", "Month"], ["quarter", "Quarter"], ["year", "Year"]]}
-              onChange={(g) => {
-                setGranularity(g);
-                setSelected(null);
-              }}
-              className="w-full sm:w-auto"
-            />
-            <Segmented
-              label="History shown"
-              value={range}
-              options={RANGES.map((r) => [r, r === "all" ? "All" : `${r} mo`] as const)}
-              onChange={setRange}
-              className="w-full sm:w-auto"
-            />
-          </div>
+        <header className="mb-4">
+          <h1 className="text-2xl font-semibold tracking-tight">Supply chain</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {isCA
+              ? "Amazon.ca: what FBA cost, against what the stock sold, in Canadian dollars."
+              : "Amazon.com: what FBA and AWD cost, against what the stock sold, in US dollars."}
+          </p>
         </header>
 
         {error && (
@@ -248,7 +240,7 @@ export default function Page() {
         )}
 
         {data && !data.blocked && (waiting > 0 || loadingSources.length > 0) && (
-          <p role="status" className="mb-6 text-sm text-muted-foreground">
+          <p role="status" className="mb-4 text-sm text-muted-foreground">
             {waiting > 0 &&
               `${scanningNow ? `Reading ${monthLabel(scanningNow, "long")} from Amazon. ` : ""}${waiting} month${waiting === 1 ? "" : "s"} of fees still to read, about six minutes each; finished months are kept. `}
             {loadingSources.map(([name, st]) => `${name}: ${st === "scanning" ? "loading" : st}`).join(" · ")}
@@ -256,154 +248,228 @@ export default function Page() {
           </p>
         )}
 
-        {current && (
-          <section className="mb-12">
-            <h2 className="mb-1 text-xl font-semibold tracking-tight">Is the supply chain improving?</h2>
-            <div className="mb-2 flex flex-wrap items-center gap-2 text-sm">
-              <span className="font-medium">
-                {periodLabel(current.key, current.granularity, true)}
-                {current.toDate ? " to date" : ""}
-              </span>
-              <span className="text-muted-foreground">compared with</span>
-              <ComparePicker period={current} changes={changes} compare={compare} onChange={setCompare} />
-            </div>
-            <p className="mb-4 text-sm text-muted-foreground">
-              Measures you move, per unit or per dollar of stock so sales volume can't flatter them; in-stock rate is there so
-              a leaner inventory only counts if customers could still buy.
-            </p>
-            <Scorecard
-              current={current}
-              base={base}
-              currentName={periodLabel(current.key, current.granularity)}
-              baseName={base ? periodLabel(base.key, base.granularity) : null}
-              history={monthly}
-              exclude={isCA ? ["awdStoragePerUnitMonth", "gmroi"] : []}
+        {/* One place for every choice that changes what the tabs show. */}
+        <div className="-mx-4 mb-6 border-b border-border bg-background px-4 pt-3 sm:sticky sm:top-0 sm:z-20 sm:-mx-6 sm:px-6">
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <Segmented
+              label="Marketplace"
+              value={market}
+              options={[["US", "US"], ["CA", "Canada"]]}
+              onChange={(m) => {
+                setMarket(m);
+                setSelected(null);
+                setData(null);
+                if (m === "CA") setChannel("fba"); // no AWD in Canada
+              }}
             />
-          </section>
-        )}
-
-        {current && (
-          <section className="mb-10">
-            <div className="mb-4 flex flex-wrap items-center gap-2 text-sm">
-              <span className="font-medium">
-                {periodLabel(current.key, current.granularity, true)}
-                {current.toDate ? " to date" : ""}
-              </span>
-              <span className="text-muted-foreground">compared with</span>
-              <ComparePicker period={current} changes={changes} compare={compare} onChange={setCompare} />
-            </div>
-            {HEADLINE.map((row, i) => (
-              <dl
-                key={i}
-                className={cn("grid grid-cols-2 gap-x-8 gap-y-5 sm:grid-cols-3 lg:grid-cols-6", i > 0 && "mt-6 border-t border-border pt-6")}
-              >
-                {row.map((k) => (
-                  <Stat key={k} p={current} base={base} k={k} />
-                ))}
-              </dl>
-            ))}
-            {isCA ? (
-              <p className="mt-3 text-sm text-muted-foreground">
-                Sales and fees are in Canadian dollars; stock is valued at landed cost in US dollars, so contribution, GMROI and
-                landed cost per unit aren&apos;t shown for Canada. There is no AWD in Canada.
-              </p>
+            <Segmented
+              label="Period length"
+              value={granularity}
+              options={[["month", "Month"], ["quarter", "Quarter"], ["year", "Year"]]}
+              onChange={(g) => {
+                setGranularity(g);
+                setSelected(null);
+              }}
+            />
+            {current ? (
+              <>
+                <label htmlFor="period" className="sr-only">
+                  Period
+                </label>
+                <select
+                  id="period"
+                  value={current.key}
+                  onChange={(e) => setSelected(e.target.value)}
+                  className="h-11 rounded-md border border-input bg-background px-2 font-medium sm:h-8"
+                >
+                  {[...periods].reverse().map((p) => (
+                    <option key={p.key} value={p.key}>
+                      {periodLabel(p.key, p.granularity, true)}
+                      {p.toDate ? " to date" : ""}
+                      {p.feeMonths < p.months.length ? " (incomplete)" : ""}
+                    </option>
+                  ))}
+                </select>
+                <span className="text-muted-foreground">compared with</span>
+                <ComparePicker period={current} changes={changes} compare={compare} onChange={setCompare} />
+              </>
             ) : null}
-            <Definitions metrics={HEADLINE.flat().map((k) => METRICS[k])} />
-          </section>
-        )}
+            <Segmented
+              label="History loaded"
+              value={range}
+              options={RANGES.map((r) => [r, r === "all" ? "All" : `${r} mo`] as const)}
+              onChange={setRange}
+              className="sm:ml-auto"
+            />
+          </div>
+          <div role="tablist" aria-label="Views" className="mt-3 flex gap-1 overflow-x-auto overflow-y-hidden">
+            {TABS.map(([key, text]) => (
+              <button
+                key={key}
+                type="button"
+                role="tab"
+                id={`tab-${key}`}
+                aria-selected={tab === key}
+                aria-controls={`panel-${key}`}
+                onClick={() => chooseTab(key)}
+                className={cn(
+                  "-mb-px min-h-11 whitespace-nowrap border-b-2 px-3 text-sm sm:min-h-0 sm:py-2",
+                  tab === key ? "border-primary font-medium text-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {key === "periods" ? `By ${granularity}` : text}
+              </button>
+            ))}
+          </div>
+        </div>
 
         {current && data && (
-          <section className="mb-10">
-            <h2 className="mb-1 text-xl font-semibold tracking-tight">FBA storage against target days of cover</h2>
-            <p className="mb-3 text-sm text-muted-foreground">
-              What FBA storage would have cost holding the target days of stock in FBA on every day, against what Amazon charged.
-            </p>
-            <CoverSection rows={data.skus} period={current} base={base} channel="fba" />
-          </section>
-        )}
+          <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
+            {tab === "overview" && (
+              <>
+                <section className="mb-12">
+                  <h2 className="mb-1 text-xl font-semibold tracking-tight">Is the supply chain improving?</h2>
+                  <p className="mb-4 text-sm text-muted-foreground">
+                    Measures you move, per unit or per dollar of stock so sales volume can&apos;t flatter them; in-stock rate is
+                    there so a leaner inventory only counts if customers could still buy.
+                  </p>
+                  <Scorecard
+                    current={current}
+                    base={base}
+                    currentName={periodLabel(current.key, current.granularity)}
+                    baseName={base ? periodLabel(base.key, base.granularity) : null}
+                    history={monthly}
+                    exclude={isCA ? ["awdStoragePerUnitMonth", "gmroi"] : []}
+                  />
+                </section>
 
-        {current && data && !isCA && (
-          <section className="mb-10">
-            <h2 className="mb-1 text-xl font-semibold tracking-tight">AWD storage against target days of cover</h2>
-            <p className="mb-3 text-sm text-muted-foreground">
-              The same for stock waiting at AWD: what AWD storage would have cost holding the target days there, against what
-              Amazon charged.
-            </p>
-            <CoverSection rows={data.skus} period={current} base={base} channel="awd" />
-          </section>
-        )}
+                <section className="mb-12">
+                  <h2 className="mb-4 text-xl font-semibold tracking-tight">Headline figures</h2>
+                  {HEADLINE.map((row, i) => (
+                    <dl
+                      key={i}
+                      className={cn("grid grid-cols-2 gap-x-8 gap-y-5 sm:grid-cols-3 lg:grid-cols-6", i > 0 && "mt-6 border-t border-border pt-6")}
+                    >
+                      {row.map((k) => (
+                        <Stat key={k} p={current} base={base} k={k} />
+                      ))}
+                    </dl>
+                  ))}
+                  {isCA ? (
+                    <p className="mt-3 text-sm text-muted-foreground">
+                      Sales and fees are in Canadian dollars; stock is valued at landed cost in US dollars, so contribution, GMROI
+                      and landed cost per unit aren&apos;t shown for Canada. There is no AWD in Canada.
+                    </p>
+                  ) : null}
+                  <Definitions metrics={HEADLINE.flat().map((k) => METRICS[k])} />
+                </section>
 
-        {complete.length > 0 && (
-          <section className="mb-10 grid gap-10 lg:grid-cols-2">
-            <div>
-              <h2 className="mb-3 font-medium">Supply-chain cost</h2>
-              <CostChart
-                periods={complete}
-                bases={complete.map((p) => changes.get(p.key)?.[compare] ?? null)}
-                baseLabel={compare === "yoy" ? "Same period last year" : "Prior period"}
-              />
-            </div>
-            <div>
-              <h2 className="mb-3 font-medium">Cost as a share of net sales</h2>
-              <ShareChart periods={complete} />
-            </div>
-          </section>
-        )}
-
-        {data && (
-          <section className="mb-10">
-            <h2 className="mb-1 font-medium">By {granularity}</h2>
-            <p className="mb-3 text-sm text-muted-foreground">
-              Changes are {compare === "yoy" ? "against the same months a year earlier" : `against the prior ${granularity}`}, like
-              for like. Storage is filed under the month it was for. FBA stock is Amazon&apos;s ledger; AWD stock is worked back
-              from today&apos;s. Click a row to see its SKUs.
-            </p>
-            <PeriodTable
-              periods={periods}
-              changes={changes}
-              compare={compare}
-              selected={current?.key ?? null}
-              onSelect={setSelected}
-              scanning={scanningNow}
-              heliumMonths={heliumMonths}
-              unavailableMonths={unavailableMonths}
-            />
-          </section>
-        )}
-
-        {current && (
-          <section className="mb-10">
-            <h2 className="mb-1 font-medium">
-              SKUs in {periodLabel(current.key, current.granularity, true)}
-              {baseName ? <span className="font-normal text-muted-foreground"> · changes vs {baseName}</span> : null}
-            </h2>
-            <p className="mb-3 text-sm text-muted-foreground">
-              Sales and fulfilment fees per order line; FBA storage from Amazon&apos;s per-ASIN report; AWD processing and transport
-              traced to the shipments and orders that moved each SKU, AWD storage shared by units held.
-            </p>
-            {periodFromHelium ? (
-              <p className="text-sm text-muted-foreground">
-                No per-SKU detail for this period: it is older than Amazon&apos;s finance API keeps (730 days), and the Helium 10
-                history it comes from is account totals only.
-              </p>
-            ) : (
-              <SkuTable rows={skuRows} vsLabel={vsLabel} />
+                {complete.length > 0 && (
+                  <section className="grid gap-10 lg:grid-cols-2">
+                    <div>
+                      <h2 className="mb-3 font-medium">Supply-chain cost</h2>
+                      <CostChart
+                        periods={complete}
+                        bases={complete.map((p) => changes.get(p.key)?.[compare] ?? null)}
+                        baseLabel={compare === "yoy" ? "Same period last year" : "Prior period"}
+                      />
+                    </div>
+                    <div>
+                      <h2 className="mb-3 font-medium">Cost as a share of net sales</h2>
+                      <ShareChart periods={complete} />
+                    </div>
+                  </section>
+                )}
+              </>
             )}
-          </section>
-        )}
 
-        {data && (
-          <section>
-            <h2 className="mb-1 font-medium">Inventory age</h2>
-            {isCA ? (
-              <p className="text-sm text-muted-foreground">
-                The daily inventory-age snapshot reads Amazon&apos;s US planning report only. Canada&apos;s aged surcharge is in the
-                tables above.
-              </p>
-            ) : (
-              <AgePanel ageNow={data.inventory.ageNow} days={data.inventory.snapshotDays} names={names} />
+            {tab === "storage" && (
+              <section>
+                <div className="mb-1 flex flex-wrap items-center justify-between gap-3">
+                  <h2 className="text-xl font-semibold tracking-tight">
+                    {channel === "awd" ? "AWD" : "FBA"} storage against target days of cover
+                  </h2>
+                  {!isCA ? (
+                    <Segmented
+                      label="Storage"
+                      value={channel}
+                      options={[["fba", "FBA"], ["awd", "AWD"]]}
+                      onChange={setChannel}
+                    />
+                  ) : null}
+                </div>
+                <p className="mb-4 text-sm text-muted-foreground">
+                  {channel === "awd"
+                    ? "Stock waiting at AWD: what AWD storage would have cost holding the target days there, against what Amazon charged."
+                    : "What FBA storage would have cost holding the target days of stock in FBA on every day, against what Amazon charged."}
+                </p>
+                <CoverSection
+                  key={channel}
+                  rows={data.skus}
+                  period={current}
+                  base={base}
+                  agedByMonth={agedByMonth}
+                  channel={isCA ? "fba" : channel}
+                />
+              </section>
             )}
-          </section>
+
+            {tab === "periods" && (
+              <section>
+                <h2 className="mb-1 text-xl font-semibold tracking-tight">By {granularity}</h2>
+                <p className="mb-3 text-sm text-muted-foreground">
+                  Changes are {compare === "yoy" ? "against the same months a year earlier" : `against the prior ${granularity}`},
+                  like for like. Storage is filed under the month it was for. FBA stock is Amazon&apos;s ledger; AWD stock is worked
+                  back from today&apos;s. Click a row to make it the period every tab shows.
+                </p>
+                <PeriodTable
+                  periods={periods}
+                  changes={changes}
+                  compare={compare}
+                  selected={current.key}
+                  onSelect={setSelected}
+                  scanning={scanningNow}
+                  heliumMonths={heliumMonths}
+                  unavailableMonths={unavailableMonths}
+                />
+              </section>
+            )}
+
+            {tab === "skus" && (
+              <section>
+                <h2 className="mb-1 text-xl font-semibold tracking-tight">
+                  SKUs in {periodLabel(current.key, current.granularity, true)}
+                  {baseName ? <span className="font-normal text-muted-foreground"> · changes vs {baseName}</span> : null}
+                </h2>
+                <p className="mb-3 text-sm text-muted-foreground">
+                  Sales and fulfilment fees per order line; FBA storage from Amazon&apos;s per-ASIN report; AWD processing and
+                  transport traced to the shipments and orders that moved each SKU, AWD storage shared by units held.
+                </p>
+                {periodFromHelium ? (
+                  <p className="text-sm text-muted-foreground">
+                    No per-SKU detail for this period: it is older than Amazon&apos;s finance API keeps (730 days), and the Helium
+                    10 history it comes from is account totals only.
+                  </p>
+                ) : (
+                  <SkuTable rows={skuRows} vsLabel={vsLabel} />
+                )}
+              </section>
+            )}
+
+            {tab === "age" && (
+              <section>
+                <h2 className="mb-1 text-xl font-semibold tracking-tight">Inventory age</h2>
+                {isCA ? (
+                  <p className="text-sm text-muted-foreground">
+                    The daily inventory-age snapshot reads Amazon&apos;s US planning report only. Canada&apos;s aged surcharge is in
+                    the storage tab.
+                  </p>
+                ) : (
+                  <AgePanel ageNow={data.inventory.ageNow} days={data.inventory.snapshotDays} names={names} />
+                )}
+              </section>
+            )}
+          </div>
         )}
       </div>
     </main>
