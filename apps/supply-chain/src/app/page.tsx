@@ -318,7 +318,7 @@ export default function Page() {
             <p className="mb-3 text-sm text-muted-foreground">
               What FBA storage would have cost holding the target days of stock in FBA on every day, against what Amazon charged.
             </p>
-            <CoverSection rows={data.skus} period={current} channel="fba" />
+            <CoverSection rows={data.skus} period={current} base={base} channel="fba" />
           </section>
         )}
 
@@ -329,7 +329,7 @@ export default function Page() {
               The same for stock waiting at AWD: what AWD storage would have cost holding the target days there, against what
               Amazon charged.
             </p>
-            <CoverSection rows={data.skus} period={current} channel="awd" />
+            <CoverSection rows={data.skus} period={current} base={base} channel="awd" />
           </section>
         )}
 

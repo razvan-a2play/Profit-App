@@ -115,6 +115,17 @@ describe("price per unit", () => {
     expect(june.idealStorage).toBeCloseTo(june.cuftTarget! * 0.78, 0);
     expect(r.months[0].cuftHeld).toBe(120);
   });
+
+  it("marks months whose aged report is unread, and keeps excess without aged apart", () => {
+    const mk = (aged: number | null) =>
+      ["2026-06", "2026-07", "2026-08"].map((m) => row(m, { unitsShipped: 310, avgUnitsHeld: 1200, fbaStorage: 30, agedSurcharge: aged }));
+    const unread = storageVsTarget(mk(null), 60, "fba").months[0];
+    const read = storageVsTarget(mk(5), 60, "fba").months[0];
+    expect(unread.agedKnown).toBe(false);
+    expect(read.agedKnown).toBe(true);
+    expect(read.overstockCost - read.overstockStorage).toBeCloseTo(5, 2);
+    expect(unread.overstockStorage).toBeCloseTo(read.overstockStorage, 2);
+  });
 });
 
 describe("per channel", () => {

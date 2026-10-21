@@ -41,6 +41,8 @@ export interface CoverRow {
   ratePerCuft: number | null;
   /** True when running lean was capped at MAX_SCALE × the storage charged. */
   capped: boolean;
+  /** False while the SKU's aged surcharge report for the month is unread (counted as $0 meanwhile). */
+  agedKnown: boolean;
   /** Units per day the target is sized on. */
   dailyDemand: number;
   /** "forward" (the 60 days that followed) or "trailing" (latest months). */
@@ -63,12 +65,18 @@ export interface CoverMonth {
   idealStorage: number;
   /** Paid for stock above the target. */
   overstockCost: number;
+  /** The same leaving the aged surcharge out: comparable with months whose aged report is unread. */
+  overstockStorage: number;
+  /** Every SKU's aged surcharge report has been read. */
+  agedKnown: boolean;
   /** Storage saved where stock ran below the target (with the stockout risk that brings). */
   leanSaving: number;
   /** overstockCost − leanSaving. */
   net: number;
   /** Demand-weighted days of cover actually held. */
   coverDays: number | null;
+  /** Units per day the month's SKUs were sized on, summed. */
+  dailyDemand: number;
   /** Units held and units the target needed, summed over the SKUs judged. */
   unitsHeld: number;
   targetUnits: number;
@@ -139,21 +147,21 @@ export function demandRate(
  */
 export type CoverChannel = "fba" | "awd" | "total";
 
-function channelInputs(r: InventorySkuRow, channel: CoverChannel): { held: number; storage: number; aged: number } | null {
+function channelInputs(r: InventorySkuRow, channel: CoverChannel): { held: number; storage: number; aged: number; agedKnown: boolean } | null {
   // FBA units are the average Amazon billed storage on (its storage report),
   // so storage ÷ units is exactly its price per unit: cubic feet × the rate.
   const fbaHeld = r.avgUnitsStored ?? r.fbaUnitsAvg;
   if (channel === "fba") {
     if (r.fbaStorage == null || fbaHeld == null) return null;
-    return { held: fbaHeld, storage: r.fbaStorage, aged: r.agedSurcharge ?? 0 };
+    return { held: fbaHeld, storage: r.fbaStorage, aged: r.agedSurcharge ?? 0, agedKnown: r.agedSurcharge != null };
   }
   if (channel === "awd") {
     // AWD storage is invoiced a month in arrears; until then it is unknown, not $0.
     if (r.awdStorage == null || r.awdUnitsAvg == null) return null;
-    return { held: r.awdUnitsAvg, storage: r.awdStorage, aged: 0 };
+    return { held: r.awdUnitsAvg, storage: r.awdStorage, aged: 0, agedKnown: true };
   }
   if (r.fbaStorage == null || fbaHeld == null) return null;
-  return { held: fbaHeld + (r.awdUnitsAvg ?? 0), storage: r.fbaStorage + (r.awdStorage ?? 0), aged: r.agedSurcharge ?? 0 };
+  return { held: fbaHeld + (r.awdUnitsAvg ?? 0), storage: r.fbaStorage + (r.awdStorage ?? 0), aged: r.agedSurcharge ?? 0, agedKnown: r.agedSurcharge != null };
 }
 
 export function storageVsTarget(rows: InventorySkuRow[], targetDays = 60, channel: CoverChannel = "total"): CoverReport {
@@ -195,6 +203,7 @@ export function storageVsTarget(rows: InventorySkuRow[], targetDays = 60, channe
       cuftTarget: cuft ? round(target * cuft, 1) : null,
       ratePerCuft: cuftHeld ? round(storage / cuftHeld, 3) : null,
       capped: held > 0 && target / held > MAX_SCALE,
+      agedKnown: input.agedKnown,
       dailyDemand: round(d.rate, 2),
       demandBasis: d.basis,
       targetUnits: Math.round(target),
@@ -223,9 +232,12 @@ export function storageVsTarget(rows: InventorySkuRow[], targetDays = 60, channe
         agedSurcharge: round(sum(rs.map((r) => r.agedSurcharge))),
         idealStorage: round(sum(rs.map((r) => r.idealStorage))),
         overstockCost: round(over),
+        overstockStorage: round(sum(rs.map((r) => Math.max(r.actualStorage - r.idealStorage, 0)))),
+        agedKnown: rs.every((r) => r.agedKnown),
         leanSaving: round(lean),
         net: round(over - lean),
         coverDays: demand > 0 ? Math.round(sum(rs.map((r) => r.unitsHeld)) / demand) : null,
+        dailyDemand: round(demand),
         unitsHeld: sum(rs.map((r) => r.unitsHeld)),
         targetUnits: sum(rs.map((r) => r.targetUnits)),
         cuftHeld: round(sum(rs.map((r) => r.cuftHeld ?? 0)), 1),
