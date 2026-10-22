@@ -57,10 +57,15 @@ export interface LoadOptions {
   requireSkuSales?: boolean;
   /**
    * Keep re-asking the gateway for a month until its charges arrive signed
-   * (refunds negative). Older copies are still served and shown meanwhile;
-   * they just never count as final.
+   * (refunds negative) and split by marketplace (by_market). Older copies are
+   * still served and shown meanwhile; they just never count as final.
    */
   requireSigned?: boolean;
+}
+
+/** Charges in the current form: signed, and split by marketplace so no market's totals carry another's. */
+function current(b: CachedMonth["billed"] | null | undefined): boolean {
+  return b?.signed === true && b.by_market != null;
 }
 
 /** A month is settled once Amazon has given everything it is going to give. */
@@ -71,7 +76,7 @@ export function isSettled(
 ): boolean {
   return Boolean(
     feesRead(c, requireSkuSales) &&
-      (!requireSigned || c?.billed?.signed === true) &&
+      (!requireSigned || current(c?.billed)) &&
       (c?.storage?.ready || c?.monthUnavailable),
   );
 }
@@ -121,7 +126,7 @@ export async function loadMonthCosts(
     // Anything already finished is reused rather than fetched again.
     const haveStorage = cached?.storage?.ready ? cached.storage : null;
     const haveBilled =
-      feesRead(cached, requireSkuSales) && (!requireSigned || cached!.billed!.signed === true) ? cached!.billed : null;
+      feesRead(cached, requireSkuSales) && (!requireSigned || current(cached!.billed)) ? cached!.billed : null;
 
     // The report id for a month is remembered, because getReports is limited to
     // roughly one call every 45 seconds — far too scarce to spend on every

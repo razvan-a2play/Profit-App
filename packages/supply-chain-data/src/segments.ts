@@ -131,6 +131,10 @@ export function monthsForSkus(months: InventoryMonthSummary[], rows: InventorySk
     const heldValue = sum(costed.map((r) => (r.avgUnitsHeld ?? 0) * r.unitCost!));
     const cogsSold = sum(costed.map((r) => r.cogsSold ?? 0));
     const anyLedger = rs.some((r) => r.fbaUnitsEnd != null);
+    // Stock is unknown in months before the FBA ledger, not zero.
+    const stockKnown = costed.length > 0 && rs.some((r) => r.avgUnitsHeld != null);
+    // Month-end balances (value, excess, dead stock) need the FBA ledger.
+    const endKnown = stockKnown && rs.some((r) => r.fbaUnitsEnd != null);
     const anyAwd = rs.some((r) => r.awdUnitsEnd != null);
     const stocked = rs.filter((r) => r.inStockShare != null && r.inStockWeight);
     const weight = sum(stocked.map((r) => r.inStockWeight!));
@@ -161,10 +165,10 @@ export function monthsForSkus(months: InventoryMonthSummary[], rows: InventorySk
 
       fbaUnitsEnd: anyLedger ? tot((r) => r.fbaUnitsEnd) : null,
       awdUnitsEnd: anyAwd ? tot((r) => r.awdUnitsEnd) : null,
-      inventoryValue: costed.length ? sum(costed.map((r) => r.inventoryValue ?? 0)) : null,
+      inventoryValue: endKnown ? sum(costed.map((r) => r.inventoryValue ?? 0)) : null,
       cogsSold: costed.length ? cogsSold : null,
-      turnover: heldValue > 0 ? (cogsSold / heldValue) * (365 / days) : null,
-      daysOfInventory: cogsSold > 0 ? Math.round(heldValue / (cogsSold / days)) : null,
+      turnover: stockKnown && heldValue > 0 ? (cogsSold / heldValue) * (365 / days) : null,
+      daysOfInventory: stockKnown && cogsSold > 0 ? Math.round(heldValue / (cogsSold / days)) : null,
       costCoverage: netSales > 0 ? sum(costed.map((r) => r.netSales)) / netSales : null,
       awdUnattributed: 0,
       agedSurchargeBySku: agedSurcharge,
@@ -172,9 +176,9 @@ export function monthsForSkus(months: InventoryMonthSummary[], rows: InventorySk
       unitsReceived: anyLedger ? received : null,
       fbaUnitsAvg: anyLedger ? tot((r) => r.fbaUnitsAvg) : null,
       awdUnitsAvg: anyAwd ? tot((r) => r.awdUnitsAvg) : null,
-      heldValue: costed.length ? heldValue : null,
-      excessValue: costed.length ? sum(costed.filter((r) => r.excessStock).map((r) => r.inventoryValue ?? 0)) : null,
-      deadValue: costed.length ? sum(costed.filter((r) => (r.unitsShipped ?? 0) === 0).map((r) => r.inventoryValue ?? 0)) : null,
+      heldValue: stockKnown ? heldValue : null,
+      excessValue: endKnown ? sum(costed.filter((r) => r.excessStock).map((r) => r.inventoryValue ?? 0)) : null,
+      deadValue: endKnown ? sum(costed.filter((r) => (r.unitsShipped ?? 0) === 0).map((r) => r.inventoryValue ?? 0)) : null,
       inStockRate: weight > 0 ? sum(stocked.map((r) => r.inStockShare! * r.inStockWeight!)) / weight : null,
       skusStockedOut: weight > 0 ? stocked.filter((r) => r.inStockShare! < 0.95).length : null,
     };

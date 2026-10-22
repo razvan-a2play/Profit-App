@@ -161,6 +161,26 @@ describe("AWD storage by cubic feet", () => {
     expect(big.awdStorage).toBe(80);
     expect(small.awdStorage).toBe(20);
   });
+
+  it("takes FBA stock from the storage report in a month without the FBA ledger", () => {
+    // Average stock is known (100 FBA from the storage report + AWD); month-end balances aren't.
+    const big = inv.skus.find((r) => r.sku === "BIG")!;
+    expect(big.avgUnitsHeld).toBe(100 + big.awdUnitsAvg!);
+    expect(big.inventoryValue).toBeNull();
+  });
+
+  it("leaves stock unknown, not AWD-only, with neither the ledger nor the storage report", () => {
+    const bare = { ...costsByMonth, "2026-09": { ...costsByMonth["2026-09"], storage: null } };
+    const r = buildMonthlyReport({ months: ["2026-09"], costsByMonth: bare, asinBySku: { BIG: "ABIG", SMALL: "ASMALL" } });
+    const inv2 = addInventory(r, {
+      ledger: null, asinBySku: { BIG: "ABIG", SMALL: "ASMALL" },
+      awdNow: { BIG: { available: 500, inbound: 0, reserved: 0, toFba: 0 } },
+      awdMovements: { shipments: [], orders: [] }, agedBySku: {}, unitCost: { BIG: { cost: 2, source: "landed" } },
+      costsByMonth: bare, today: "2026-10-20",
+    });
+    expect(inv2.skus.find((x) => x.sku === "BIG")!.avgUnitsHeld).toBeNull();
+    expect(inv2.months[0].daysOfInventory).toBeNull();
+  });
 });
 
 describe("receiving dates", () => {

@@ -399,6 +399,12 @@ export function addInventory(report: MonthlyReport, i: InventoryInputs): Invento
       ledgerBySku.set(sku, prior ? addLedger(prior, l) : l);
       asinOf.set(sku, a);
     }
+    // Amazon keeps 18 months of ledger: older months have no FBA stock figures.
+    const ledgerMonth = ledgerBySku.size > 0;
+    // Before it, Amazon's monthly storage report still gives each ASIN's average
+    // FBA units: enough for average stock (turnover, days), not month-end balances.
+    const storageMonth = [...existing.values()].some((r) => r.avgUnitsStored != null);
+    const avgKnown = ledgerMonth || storageMonth;
 
     // Rows for every SKU that sold, or held stock at FBA or AWD this month.
     const all = new Set(existing.keys());
@@ -429,18 +435,22 @@ export function addInventory(report: MonthlyReport, i: InventoryInputs): Invento
       const l = ledgerBySku.get(sku);
       const awdE = awdEnd?.[sku]?.[m] ?? (awdEnd ? 0 : null);
       const awdAvg = awdHeld.get(sku) ?? (awdEnd ? 0 : null);
-      const fbaAvg = l ? (l.start + l.end) / 2 : null;
-      const avgHeld = fbaAvg == null && awdAvg == null ? null : (fbaAvg ?? 0) + (awdAvg ?? 0);
+      const fbaAvg = l ? (l.start + l.end) / 2 : !ledgerMonth ? base.avgUnitsStored : null;
+      // Without the month's FBA ledger, FBA stock is unknown, not zero: a total
+      // of AWD alone would make the month look far leaner than it was.
+      const avgHeld = !avgKnown || (fbaAvg == null && awdAvg == null) ? null : (fbaAvg ?? 0) + (awdAvg ?? 0);
       // The ledger's customer shipments are the units that left stock; they
       // match the balances. Order lines are the fallback for a SKU it lacks.
       const shipped = l ? l.shipments : base.unitsSold || null;
       const c = cost.get(sku) ?? null;
-      const endUnits = l || awdE != null ? (l?.end ?? 0) + (awdE ?? 0) : null;
+      const endUnits = ledgerMonth && (l || awdE != null) ? (l?.end ?? 0) + (awdE ?? 0) : null;
       const h = handling?.bySku[m]?.[sku];
       const aged = agedMonth?.[sku];
 
       monthRows.push({
         ...base,
+        // A month whose storage report lacks the SKU keeps its latest measured cu ft.
+        cuftPerUnit: base.cuftPerUnit ?? cuftBySku.get(sku) ?? (base.asin ? cuftByAsin.get(up(base.asin)) : undefined) ?? null,
         fbaUnitsEnd: l ? l.end : null,
         awdUnitsEnd: awdE,
         avgUnitsHeld: avgHeld != null ? Math.round(avgHeld) : null,
@@ -492,15 +502,17 @@ export function addInventory(report: MonthlyReport, i: InventoryInputs): Invento
     const netSales = sum(monthRows.map((r) => r.netSales));
     const costedSales = sum(costed.map((r) => r.netSales));
     const anyLedger = monthRows.some((r) => r.fbaUnitsEnd != null);
+    const stockKnown = ledgerMonth && costed.length > 0;
+    const avgStockKnown = avgKnown && costed.length > 0;
 
     outMonths.push({
       ...summary,
       fbaUnitsEnd: anyLedger ? sum(monthRows.map((r) => r.fbaUnitsEnd ?? 0)) : null,
       awdUnitsEnd: awdEnd ? sum(monthRows.map((r) => r.awdUnitsEnd ?? 0)) : null,
-      inventoryValue: costed.length ? round(sum(costed.map((r) => r.inventoryValue ?? 0))) : null,
+      inventoryValue: stockKnown ? round(sum(costed.map((r) => r.inventoryValue ?? 0))) : null,
       cogsSold: costed.length ? round(cogsSold) : null,
-      turnover: heldValue > 0 ? round((cogsSold / heldValue) * (365 / days), 2) : null,
-      daysOfInventory: cogsSold > 0 ? Math.round(heldValue / (cogsSold / days)) : null,
+      turnover: avgStockKnown && heldValue > 0 ? round((cogsSold / heldValue) * (365 / days), 2) : null,
+      daysOfInventory: avgStockKnown && cogsSold > 0 ? Math.round(heldValue / (cogsSold / days)) : null,
       costCoverage: netSales > 0 ? round(costedSales / netSales, 4) : null,
       awdUnattributed: round(handling?.unattributed[m] ?? 0),
       agedSurchargeBySku: agedMonth ? round(sum(Object.values(agedMonth).map((a) => a.amount))) : null,
@@ -508,12 +520,12 @@ export function addInventory(report: MonthlyReport, i: InventoryInputs): Invento
       unitsReceived: anyLedger ? sum(monthRows.map((r) => r.unitsReceived ?? 0)) : null,
       fbaUnitsAvg: anyLedger ? round(sum(monthRows.map((r) => r.fbaUnitsAvg ?? 0)), 0) : null,
       awdUnitsAvg: awdEnd ? round(sum(monthRows.map((r) => r.awdUnitsAvg ?? 0)), 0) : null,
-      heldValue: costed.length ? round(heldValue) : null,
-      excessValue: costed.length
+      heldValue: avgStockKnown ? round(heldValue) : null,
+      excessValue: stockKnown
         ? round(sum(costed.filter(isExcess).map((r) => r.inventoryValue ?? 0)))
         : null,
       ...inStockFor(m, i),
-      deadValue: costed.length
+      deadValue: stockKnown
         ? round(sum(costed.filter((r) => (r.unitsShipped ?? 0) === 0).map((r) => r.inventoryValue ?? 0)))
         : null,
     });
