@@ -111,7 +111,7 @@ describe("addInventory", () => {
     expect(dead.agedSurcharge).toBe(12.5);
   });
 
-  it("shares AWD storage by AWD units held", () => {
+  it("gives the only SKU held at AWD the whole AWD bill", () => {
     expect(a1.awdStorage).toBe(90);
   });
 
@@ -121,6 +121,45 @@ describe("addInventory", () => {
     expect(m.inventoryValue).toBe(2200 + 500);
     expect(m.turnover).toBeCloseTo((600 / (1075 * 2 + 500 * 1)) * (365 / 30), 2);
     expect(m.costCoverage).toBe(1);
+  });
+});
+
+describe("AWD storage by cubic feet", () => {
+  // Same AWD units; BIG takes four times the space per unit, so it carries four times the bill.
+  const costsByMonth: Record<string, MonthCostsInput> = {
+    "2026-09": {
+      billed: billed([], {
+        BIG: { units_sold: 10, units_refunded: 0, sales: 100, refunds: 0, fees: {} },
+        SMALL: { units_sold: 10, units_refunded: 0, sales: 100, refunds: 0, fees: {} },
+      }),
+      storage: {
+        ready: true,
+        rows: [
+          { asin: "ABIG", product_name: "Big", fee: 10, avg_units: 100, item_volume_cuft: 0.2 },
+          { asin: "ASMALL", product_name: "Small", fee: 2.5, avg_units: 100, item_volume_cuft: 0.05 },
+        ],
+        totals: { fee: 12.5 },
+      } as never,
+    },
+    "2026-10": { billed: billed([charge("STARStorageFee", "awd_storage", 100, "US-2026-09-X")]), storage: null },
+  };
+  const report = buildMonthlyReport({ months: ["2026-09"], costsByMonth, asinBySku: { BIG: "ABIG", SMALL: "ASMALL" } });
+  const inv = addInventory(report, {
+    ledger: null,
+    asinBySku: { BIG: "ABIG", SMALL: "ASMALL" },
+    awdNow: { BIG: { available: 500, inbound: 0, reserved: 0, toFba: 0 }, SMALL: { available: 500, inbound: 0, reserved: 0, toFba: 0 } },
+    awdMovements: { shipments: [], orders: [] },
+    agedBySku: {},
+    unitCost: {},
+    costsByMonth,
+    today: "2026-10-20",
+  });
+
+  it("shares the month's AWD bill by units × cu ft per unit", () => {
+    const big = inv.skus.find((r) => r.sku === "BIG")!;
+    const small = inv.skus.find((r) => r.sku === "SMALL")!;
+    expect(big.awdStorage).toBe(80);
+    expect(small.awdStorage).toBe(20);
   });
 });
 

@@ -5,6 +5,7 @@ import { storageVsTarget, type CoverChannel, type CoverMonth, type InventorySkuR
 import { count, money, money2, monthLabel } from "@/lib/format";
 import { periodLabel } from "@/lib/metrics";
 import { DeltaArrow, TONE } from "./ui";
+import { SeasonalPanel } from "./SeasonalPanel";
 
 /** SKUs listed before "show all". */
 const SKU_ROWS = 15;
@@ -25,6 +26,8 @@ export function CoverSection({
   period,
   base = null,
   agedByMonth = {},
+  seasonal = {},
+  onSeasonalChange,
   channel = "total",
 }: {
   rows: InventorySkuRow[];
@@ -33,13 +36,16 @@ export function CoverSection({
   base?: PeriodSummary | null;
   /** The account's aged surcharge per month, standing in where Amazon's per-SKU aged report doesn't reach. */
   agedByMonth?: Record<string, number | null>;
+  /** Seasonal SKUs and their lead time in days (applies at AWD and in total). */
+  seasonal?: Record<string, number>;
+  onSeasonalChange?: (next: Record<string, number>) => void;
   channel?: CoverChannel;
 }) {
   const c = CHANNEL[channel];
   const storeKey = `supply-chain:target-days:${channel}`;
   const withAged = channel !== "awd";
-  // AWD has no per-unit cubic feet from Amazon, so its target is priced per unit only.
-  const cubic = channel !== "awd";
+  // Every channel bills by the cubic foot; AWD borrows the cu ft per unit Amazon measured for FBA.
+  const cubic = true;
   const [target, setTarget] = useState(60);
   const [allMonths, setAllMonths] = useState(false);
   const [allSkus, setAllSkus] = useState(false);
@@ -60,7 +66,10 @@ export function CoverSection({
     }
   };
 
-  const report = useMemo(() => storageVsTarget(rows, target, channel, agedByMonth), [rows, target, channel, agedByMonth]);
+  const report = useMemo(
+    () => storageVsTarget(rows, target, channel, agedByMonth, seasonal),
+    [rows, target, channel, agedByMonth, seasonal],
+  );
   const inPeriod = new Set(period.months);
   const months = report.months.filter((m) => inPeriod.has(m.month));
   const total = (k: "actualStorage" | "agedSurcharge" | "idealStorage" | "overstockCost" | "leanSaving" | "net") =>
@@ -70,10 +79,10 @@ export function CoverSection({
 
   // Per SKU over the period: excess cost summed, cover from the period's totals.
   const skus = useMemo(() => {
-    const by = new Map<string, { sku: string; name: string; held: number; target: number; demand: number; actual: number; aged: number; ideal: number; excess: number; n: number; cuft: number | null; cuftHeld: number; cuftTarget: number; capped: boolean }>();
+    const by = new Map<string, { sku: string; name: string; held: number; target: number; demand: number; actual: number; aged: number; ideal: number; excess: number; n: number; cuft: number | null; cuftHeld: number; cuftTarget: number; capped: boolean; lead: number | null; seasonTop: number }>();
     for (const r of report.rows) {
       if (!inPeriod.has(r.month)) continue;
-      const cur = by.get(r.sku) ?? { sku: r.sku, name: r.productName, held: 0, target: 0, demand: 0, actual: 0, aged: 0, ideal: 0, excess: 0, n: 0, cuft: null, cuftHeld: 0, cuftTarget: 0, capped: false };
+      const cur = by.get(r.sku) ?? { sku: r.sku, name: r.productName, held: 0, target: 0, demand: 0, actual: 0, aged: 0, ideal: 0, excess: 0, n: 0, cuft: null, cuftHeld: 0, cuftTarget: 0, capped: false, lead: null, seasonTop: 0 };
       if (r.cuftPerUnit) cur.cuft = r.cuftPerUnit;
       cur.held += r.unitsHeld;
       cur.target += r.targetUnits;
@@ -85,6 +94,8 @@ export function CoverSection({
       cur.cuftHeld += r.cuftHeld ?? 0;
       cur.cuftTarget += r.cuftTarget ?? 0;
       if (r.capped) cur.capped = true;
+      if (r.seasonalLeadDays != null) cur.lead = r.seasonalLeadDays;
+      cur.seasonTop += r.seasonalUnits ?? r.targetUnits;
       cur.n += 1;
       by.set(r.sku, cur);
     }
@@ -117,6 +128,10 @@ export function CoverSection({
         />
         <span className="text-muted-foreground">days of {c.stock}, every day of the month</span>
       </div>
+
+      {channel !== "fba" && onSeasonalChange ? (
+        <SeasonalPanel rows={rows} value={seasonal} onChange={onSeasonalChange} target={target} />
+      ) : null}
 
       {months.length === 0 ? (
         <p className="text-sm text-muted-foreground">
@@ -247,7 +262,12 @@ export function CoverSection({
                       {s.name ? <span className="block truncate text-xs text-muted-foreground">{s.name}</span> : null}
                     </th>
                     <td className="px-3 py-2 text-right tabular-nums">{(s.demand / s.n).toFixed(1)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">{count(Math.round(s.target / s.n))}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">
+                      {count(Math.round(s.target / s.n))}
+                      {s.lead != null ? (
+                        <span className="block text-xs text-muted-foreground">seasonal: up to {count(Math.round(s.seasonTop / s.n))}</span>
+                      ) : null}
+                    </td>
                     <td className="px-3 py-2 text-right tabular-nums">{count(Math.round(s.held / s.n))}</td>
                     <td className="px-3 py-2 text-right tabular-nums">{s.demand > 0 ? `${count(Math.round(s.held / s.demand))} d` : "no sales"}</td>
                     {cubic ? (
@@ -294,12 +314,13 @@ export function CoverSection({
               ) : null}
               <p>
                 {channel === "awd"
-                  ? `Units held are the SKU's average AWD stock, worked back from today's AWD stock through the shipments in and replenishment orders out. AWD storage at target keeps its price per unit (its share of the month's AWD invoice, by AWD units held) and scales it to the target quantity.`
+                  ? `Units held are the SKU's average AWD stock, worked back from today's AWD stock through the shipments in and replenishment orders out. Amazon invoices AWD storage for the whole account, by the cubic foot, so each SKU's share is its cubic feet held (AWD units × Amazon's measured cu ft per unit); bulkier SKUs carry more per unit. Seasonal SKUs are sized on their lead time plus the target days of demand ahead.`
                   : channel === "fba"
                     ? `Units held are the SKU's average FBA stock from Amazon's ledger. FBA storage at target keeps its real price per unit, from Amazon's per-ASIN storage report, and scales it to the target quantity. Stock that turns within the target never reaches 181 days, so the aged surcharge is all counted as excess.`
                     : `Storage at target keeps each SKU's real price per unit (FBA storage from Amazon's per-ASIN report plus its share of AWD storage) and scales it to the target quantity. The aged surcharge is all counted as excess.`}{" "}
-                Running below target is capped at 4× the storage charged, so a SKU holding a sliver of its target can&apos;t
-                dominate the savings.
+                A SKU holding under 100 units has too little stock for its own price per unit to mean much, so its cu ft × the
+                month&apos;s rate per cu ft prices the target instead; only where neither is known is the target capped at 4× what
+                it was charged.
               </p>
               <p>Amazon charged no low-inventory fee in any month read, so running lean has cost nothing in fees.</p>
             </div>

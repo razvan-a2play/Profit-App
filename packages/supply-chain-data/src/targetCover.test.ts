@@ -59,9 +59,32 @@ describe("storageVsTarget", () => {
     expect(r.rows[0].coverDays).toBeNull();
   });
 
-  it("caps the ideal for a SKU holding a sliver of its target", () => {
+  it("caps the ideal for a sliver when nothing prices a cubic foot that month", () => {
     const r = storageVsTarget([row("2026-06", { unitsShipped: 3000, avgUnitsHeld: 5, fbaStorage: 1, awdStorage: 0 })]);
     expect(r.rows[0].idealStorage).toBe(MAX_SCALE);
+    expect(r.rows[0].capped).toBe(true);
+  });
+
+  it("scales a big seller running thin at its own price, uncapped", () => {
+    // 1,000 held at $0.05 a unit; 60 days of 100 a day is 6,000 units, six times as many.
+    const r = storageVsTarget([row("2026-06", { unitsShipped: 3000, avgUnitsHeld: 1000, fbaStorage: 50, awdStorage: 0 })], 60, "fba");
+    expect(r.rows[0].idealStorage).toBeCloseTo(300, 0);
+    expect(r.rows[0].capped).toBe(false);
+  });
+
+  it("prices a sliver at its cu ft × the month's rate per cu ft", () => {
+    // OTHER sets the rate: 1,000 units × 0.1 cu ft = 100 cu ft for $78, $0.78 a cu ft.
+    const r = storageVsTarget(
+      [
+        row("2026-06", { sku: "OTHER", unitsShipped: 300, avgUnitsHeld: 1000, fbaStorage: 78, cuftPerUnit: 0.1 }),
+        row("2026-06", { sku: "THIN", unitsShipped: 300, avgUnitsHeld: 5, fbaStorage: 1, cuftPerUnit: 0.2 }),
+      ],
+      60,
+      "fba",
+    );
+    const thin = r.rows.find((x) => x.sku === "THIN")!;
+    expect(thin.idealStorage).toBeCloseTo(thin.targetUnits * 0.2 * 0.78, 1);
+    expect(thin.capped).toBe(false);
   });
 
   it("only judges months with Amazon's per-SKU storage", () => {
@@ -135,6 +158,51 @@ describe("price per unit", () => {
     expect(filled.agedSurcharge).toBe(40);
     expect(filled.overstockCost).toBeCloseTo(bare.overstockCost + 40, 2);
     expect(storageVsTarget(rows, 60, "awd", { "2026-06": 40 }).months[0]?.agedSurcharge ?? 0).toBe(0);
+  });
+});
+
+describe("seasonal SKUs", () => {
+  // Quiet in February, peak in May-June: the build has to be in hand by spring.
+  const shipped: Record<string, number> = { "2026-02": 280, "2026-03": 310, "2026-04": 600, "2026-05": 3100, "2026-06": 6000, "2026-07": 3100 };
+  const rows = Object.entries(shipped).map(([m, u]) =>
+    row(m, { sku: "POOL", unitsShipped: u, avgUnitsHeld: 3000, fbaStorage: 30, awdStorage: 60, fbaUnitsAvg: 500, avgUnitsStored: 500, awdUnitsAvg: 2500 }),
+  );
+
+  it("treats a pre-season build up to lead time + target days ahead as on target", () => {
+    const plain = storageVsTarget(rows, 60, "awd").rows.find((r) => r.month === "2026-02")!;
+    const seasonal = storageVsTarget(rows, 60, "awd", {}, { POOL: 90 }).rows.find((r) => r.month === "2026-02")!;
+    // 150 days from mid-February: 14 days of Feb, all of Mar, Apr, May and Jun (136 days), then 14 of Jul.
+    expect(seasonal.seasonalUnits).toBe(Math.round(140 + 310 + 600 + 3100 + 6000 + (3100 * 14) / 31));
+    expect(seasonal.seasonalLeadDays).toBe(90);
+    // 2,500 at AWD is above the plain target (excess there) but inside the season's band.
+    expect(plain.excessCost).toBeGreaterThan(0);
+    expect(seasonal.targetUnits).toBe(2500);
+    expect(seasonal.excessCost).toBeCloseTo(0, 2);
+  });
+
+  it("still counts stock above the season's needs as excess", () => {
+    const heavy = rows.map((r) => (r.month === "2026-02" ? { ...r, awdUnitsAvg: 20000, awdStorage: 480 } : r));
+    const feb = storageVsTarget(heavy, 60, "awd", {}, { POOL: 90 }).rows.find((r) => r.month === "2026-02")!;
+    expect(feb.targetUnits).toBe(feb.seasonalUnits);
+    expect(feb.excessCost).toBeGreaterThan(0);
+  });
+
+  it("doesn't turn a thin build into a saving: lean is judged on the plain target", () => {
+    const thin = rows.map((r) => (r.month === "2026-02" ? { ...r, awdUnitsAvg: 150, awdStorage: 3.6 } : r));
+    const plain = storageVsTarget(thin, 60, "awd").rows.find((r) => r.month === "2026-02")!;
+    const seasonal = storageVsTarget(thin, 60, "awd", {}, { POOL: 90 }).rows.find((r) => r.month === "2026-02")!;
+    expect(seasonal.targetUnits).toBe(plain.targetUnits);
+    expect(seasonal.excessCost).toBeCloseTo(plain.excessCost, 2);
+  });
+
+  it("keeps FBA on the plain target: AWD refills it within weeks", () => {
+    const fba = storageVsTarget(rows, 60, "fba", {}, { POOL: 90 }).rows.find((r) => r.month === "2026-02")!;
+    expect(fba.seasonalLeadDays).toBeNull();
+  });
+
+  it("falls back to the plain target where the season ahead isn't read yet", () => {
+    const last = storageVsTarget(rows, 60, "awd", {}, { POOL: 90 }).rows.find((r) => r.month === "2026-06")!;
+    expect(last.seasonalLeadDays).toBeNull();
   });
 });
 

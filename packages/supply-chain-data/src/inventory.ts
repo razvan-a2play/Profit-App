@@ -94,7 +94,7 @@ export interface SkuInventory {
   daysOfInventory: number | null;
   awdProcessing: number;
   awdTransport: number;
-  /** Share of the month's AWD storage, by reconstructed AWD units. */
+  /** Share of the month's AWD storage, by cubic feet held (reconstructed AWD units × cu ft per unit). */
   awdStorage: number | null;
   agedSurcharge: number | null;
   agedUnits: number | null;
@@ -340,6 +340,22 @@ export function addInventory(report: MonthlyReport, i: InventoryInputs): Invento
   // stock to an arbitrary sibling in months whose sales were not yet read.
   const soldOverall = new Map<string, number>();
   for (const r of report.skus) soldOverall.set(r.sku, (soldOverall.get(r.sku) ?? 0) + r.unitsSold);
+
+  // AWD bills by the cubic foot but invoices the account, not the SKU, so the
+  // month's bill is shared by cubic feet held: units × Amazon's measured cu ft
+  // per unit (from the FBA storage report, newest month first; the ASIN's when
+  // the SKU has none; the median when neither has been measured).
+  const cuftBySku = new Map<string, number>();
+  const cuftByAsin = new Map<string, number>();
+  for (const r of [...report.skus].sort((a, b) => a.month.localeCompare(b.month))) {
+    if (!r.cuftPerUnit) continue;
+    cuftBySku.set(r.sku, r.cuftPerUnit);
+    if (r.asin) cuftByAsin.set(up(r.asin), r.cuftPerUnit);
+  }
+  const known = [...cuftBySku.values()].sort((a, b) => a - b);
+  const medianCuft = known.length ? known[Math.floor(known.length / 2)] : 1;
+  const cuftOf = (sku: string, asin: string | undefined) =>
+    cuftBySku.get(sku) ?? (asin ? cuftByAsin.get(up(asin)) : undefined) ?? medianCuft;
   const hasAwd = new Set(Object.keys(i.awdNow ?? {}).map(up));
   const variant = (sku: string) => /FBM$|PARENT/i.test(sku);
   const ownerOf = (candidates: string[]) =>
@@ -390,7 +406,9 @@ export function addInventory(report: MonthlyReport, i: InventoryInputs): Invento
       const start = awdEnd[sku][prev] ?? end;
       awdHeld.set(sku, (start + end) / 2);
     }
-    const awdHeldTotal = sum([...awdHeld.values()]);
+    const awdCuft = new Map<string, number>();
+    for (const [sku, units] of awdHeld) awdCuft.set(sku, units * cuftOf(sku, asinOf.get(sku) ?? existing.get(sku)?.asin ?? i.asinBySku[sku]));
+    const awdCuftTotal = sum([...awdCuft.values()]);
     const awdStorageMonth = awdStorage.get(m);
     const agedMonth = i.agedBySku[m];
 
@@ -433,8 +451,8 @@ export function addInventory(report: MonthlyReport, i: InventoryInputs): Invento
         awdProcessing: round(h?.processing ?? 0),
         awdTransport: round(h?.transport ?? 0),
         awdStorage:
-          awdStorageMonth != null && awdHeldTotal > 0
-            ? round((awdStorageMonth * (awdHeld.get(sku) ?? 0)) / awdHeldTotal)
+          awdStorageMonth != null && awdCuftTotal > 0
+            ? round((awdStorageMonth * (awdCuft.get(sku) ?? 0)) / awdCuftTotal)
             : null,
         agedSurcharge: agedMonth ? round(aged?.amount ?? 0) : null,
         agedUnits: agedMonth ? aged?.units ?? 0 : null,

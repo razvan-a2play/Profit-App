@@ -7,11 +7,15 @@
 //                 after — so each day is judged against the demand its stock
 //                 actually had to meet. Months without that much future yet
 //                 fall back to the trailing rate, and say so.
-//   target units  rate × target days
-//   ideal storage the month's actual FBA + AWD storage, scaled by target units
-//                 over units actually held: the same price per unit, the right
-//                 quantity. No aged surcharge: stock that turns inside the
-//                 target never reaches 181 days.
+//   target units  rate × target days. A seasonal SKU, judged at AWD or in
+//                 total, has to build before its season, so holding up to the
+//                 units shipped over lead time + target days ahead is on
+//                 target too: only above that is excess.
+//   ideal storage target units × the SKU's own price per unit-month (storage
+//                 ÷ units held). A SKU holding a sliver — under MIN_UNITS — has
+//                 no steady price of its own, so its cu ft × the month's rate
+//                 per cu ft stands in. No aged surcharge: stock that turns
+//                 inside the target never reaches 181 days.
 //   gain / loss   actual − ideal. Above target it is money paid for excess
 //                 stock; below target it is storage saved by running thinner
 //                 than plan, kept apart so a saving cannot hide an overspend.
@@ -39,8 +43,12 @@ export interface CoverRow {
   cuftTarget: number | null;
   /** What Amazon charged per cubic foot for the month: storage ÷ cubic feet held. */
   ratePerCuft: number | null;
-  /** True when running lean was capped at MAX_SCALE × the storage charged. */
+  /** True when the ideal fell back to MAX_SCALE × the storage charged (a sliver held, no cu ft to price it). */
   capped: boolean;
+  /** Lead time in days when the SKU was judged as seasonal. */
+  seasonalLeadDays: number | null;
+  /** The top of a seasonal SKU's band: units shipped over lead time + target days ahead. */
+  seasonalUnits: number | null;
   /** False while the SKU's aged surcharge report for the month is unread (counted as $0 meanwhile). */
   agedKnown: boolean;
   /** Units per day the target is sized on. */
@@ -101,6 +109,9 @@ const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
 /** Largest factor the ideal may scale actual storage by (see storageVsTarget). */
 export const MAX_SCALE = 4;
 
+/** Below this many units held a SKU's own storage ÷ units is too noisy to scale. */
+export const MIN_UNITS = 100;
+
 function shift(month: string, by: number): string {
   const [y, m] = month.split("-").map(Number);
   const d = new Date(Date.UTC(y, m - 1 + by, 1));
@@ -149,6 +160,29 @@ export function demandRate(
  */
 export type CoverChannel = "fba" | "awd" | "total";
 
+/**
+ * Units shipped over `windowDays` from mid-month, pro rata by day: half the
+ * month, then whole months, then the part of the last. Null when a month the
+ * window reaches has not been read.
+ */
+export function forwardUnits(shippedBy: Map<string, number>, month: string, windowDays: number, knownMonths: Set<string>): number | null {
+  let m = month;
+  let left = windowDays;
+  let units = 0;
+  let first = true;
+  while (left > 0) {
+    if (!knownMonths.has(m)) return null;
+    const dim = daysInMonth(m);
+    const avail = first ? dim / 2 : dim;
+    const take = Math.min(avail, left);
+    units += (shippedBy.get(m) ?? 0) * (take / dim);
+    left -= take;
+    first = false;
+    m = shift(m, 1);
+  }
+  return units;
+}
+
 function channelInputs(r: InventorySkuRow, channel: CoverChannel): { held: number; storage: number; aged: number; agedKnown: boolean } | null {
   // FBA units are the average Amazon billed storage on (its storage report),
   // so storage ÷ units is exactly its price per unit: cubic feet × the rate.
@@ -177,6 +211,8 @@ export function storageVsTarget(
   targetDays = 60,
   channel: CoverChannel = "total",
   agedByMonth: Record<string, number | null> = {},
+  /** Seasonal SKUs and their lead time in days. FBA is replenished from AWD within weeks, so it keeps the plain target. */
+  seasonal: Record<string, number> = {},
 ): CoverReport {
   // Months with ledger shipments, and each SKU's shipments by month.
   const knownMonths = new Set(rows.filter((r) => r.unitsShipped != null).map((r) => r.month));
@@ -187,22 +223,53 @@ export function storageVsTarget(
     shipped.get(r.sku)!.set(r.month, r.unitsShipped);
   }
 
-  const out: CoverRow[] = [];
-  for (const r of rows) {
+  const judged = rows.flatMap((r) => {
     const input = channelInputs(r, channel);
-    if (!input) continue;
+    if (!input || (input.storage <= 0 && input.aged <= 0)) return [];
+    return [{ r, input }];
+  });
+  // What a cubic foot cost in each month, from SKUs holding enough to say.
+  const rateOf = new Map<string, number>();
+  {
+    const acc = new Map<string, { storage: number; cuft: number }>();
+    for (const { r, input } of judged) {
+      if (!r.cuftPerUnit || input.held < MIN_UNITS) continue;
+      const a = acc.get(r.month) ?? { storage: 0, cuft: 0 };
+      a.storage += input.storage;
+      a.cuft += input.held * r.cuftPerUnit;
+      acc.set(r.month, a);
+    }
+    for (const [m, a] of acc) if (a.cuft > 0) rateOf.set(m, a.storage / a.cuft);
+  }
+
+  const out: CoverRow[] = [];
+  for (const { r, input } of judged) {
     const { storage, aged } = input;
-    if (storage <= 0 && aged <= 0) continue;
-    const d = demandRate(shipped.get(r.sku) ?? new Map(), r.month, knownMonths);
+    const byMonth = shipped.get(r.sku) ?? new Map<string, number>();
+    const d = demandRate(byMonth, r.month, knownMonths);
     if (!d) continue;
     const held = input.held;
-    const target = d.rate * targetDays;
+    const lead = channel !== "fba" ? seasonal[r.sku] ?? null : null;
+    const seasonUnits = lead != null ? forwardUnits(byMonth, r.month, lead + targetDays, knownMonths) : null;
+    const plain = d.rate * targetDays;
+    // A seasonal SKU's target is a band: below the plain target is lean, above
+    // the season's (lead time + target days ahead) is excess, and anything in
+    // between is the build — on target, neither lost nor saved.
+    const target = seasonUnits != null && seasonUnits > plain ? Math.min(Math.max(held, plain), seasonUnits) : plain;
+    const cuftKnown = r.cuftPerUnit ?? null;
+    const rate = rateOf.get(r.month);
     // Nothing held but storage charged (stock that left mid-month): no price
-    // per unit to scale, so it is all excess. And a SKU holding a sliver of
-    // its target — launching, or out of stock — would scale a noisy price per
-    // unit many times over; the ideal is capped at MAX_SCALE × actual.
-    const ideal = held > 0 ? storage * Math.min(target / held, MAX_SCALE) : 0;
-    const cuft = channel === "awd" ? null : r.cuftPerUnit ?? null;
+    // per unit to scale, so it is all excess. A sliver held prices at its cu
+    // ft × the month's rate; failing that, at most MAX_SCALE × what it paid.
+    let ideal = 0;
+    let capped = false;
+    if (held >= MIN_UNITS) ideal = (storage / held) * target;
+    else if (held > 0 && cuftKnown && rate) ideal = target * cuftKnown * rate;
+    else if (held > 0) {
+      ideal = storage * Math.min(target / held, MAX_SCALE);
+      capped = target / held > MAX_SCALE;
+    }
+    const cuft = cuftKnown;
     const cuftHeld = cuft ? held * cuft : null;
     out.push({
       month: r.month,
@@ -215,7 +282,9 @@ export function storageVsTarget(
       cuftHeld: cuftHeld != null ? round(cuftHeld, 1) : null,
       cuftTarget: cuft ? round(target * cuft, 1) : null,
       ratePerCuft: cuftHeld ? round(storage / cuftHeld, 3) : null,
-      capped: held > 0 && target / held > MAX_SCALE,
+      capped,
+      seasonalLeadDays: seasonUnits != null ? lead : null,
+      seasonalUnits: seasonUnits != null ? Math.round(seasonUnits) : null,
       agedKnown: input.agedKnown,
       dailyDemand: round(d.rate, 2),
       demandBasis: d.basis,

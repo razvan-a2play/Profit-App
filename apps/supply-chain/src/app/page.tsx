@@ -78,6 +78,19 @@ export default function Page() {
   const [pollTick, setPollTick] = useState(0);
   const [tab, setTab] = useState<Tab>("overview");
   const [channel, setChannel] = useState<"fba" | "awd">("fba");
+  const [seasonal, setSeasonal] = useState<Record<string, number>>({});
+  useEffect(() => {
+    fetch("/api/seasonal", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((j: Record<string, number>) => setSeasonal(j))
+      .catch(() => {
+        /* no saved setting: nothing is seasonal */
+      });
+  }, []);
+  const saveSeasonal = (next: Record<string, number>) => {
+    setSeasonal(next);
+    void fetch("/api/seasonal", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(next) });
+  };
 
   // The tab lives in the address (#storage) so a reload or a shared link opens it.
   useEffect(() => {
@@ -409,6 +422,8 @@ export default function Page() {
                   period={current}
                   base={base}
                   agedByMonth={agedByMonth}
+                  seasonal={seasonal}
+                  onSeasonalChange={saveSeasonal}
                   channel={isCA ? "fba" : channel}
                 />
               </section>
