@@ -6,6 +6,7 @@ import { cn } from "@platform/ui";
 import { count, money, money2, pct } from "@/lib/format";
 import { formatChange } from "@/lib/metrics";
 import { DeltaArrow, Segmented, TONE } from "./ui";
+import { ClassTag } from "./ClassTag";
 
 type NumKey = {
   [K in keyof SkuPeriodRow]: SkuPeriodRow[K] extends number | null ? K : never;
@@ -137,7 +138,10 @@ export function SkuTable({ rows, vsLabel }: { rows: SkuPeriodRow[]; vsLabel: str
             {shown.map((r) => (
               <tr key={r.sku} className="border-t border-border">
                 <td className="max-w-[22rem] px-3 py-2">
-                  <div className="font-medium">{r.sku}</div>
+                  <div className="font-medium">
+                    {r.sku}
+                    <ClassTag sku={r.sku} />
+                  </div>
                   <div className="truncate text-xs text-muted-foreground" title={r.productName}>
                     {r.asin}
                     {r.productName ? ` · ${r.productName}` : ""}

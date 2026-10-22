@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import type { InventorySkuRow } from "@platform/supply-chain-data";
 import { count, monthLabel } from "@/lib/format";
+import { ClassTag } from "./ClassTag";
 
 const DEFAULT_LEAD = 90;
 /** Three months carrying at least this share of a year's shipments reads as seasonal. */
@@ -128,7 +129,10 @@ export function SeasonalPanel({
                       />
                     </td>
                     <th scope="row" className="max-w-[18rem] px-3 py-2 text-left font-normal">
-                      <span className="block font-medium">{s.sku}</span>
+                      <span className="block font-medium">
+                        {s.sku}
+                        <ClassTag sku={s.sku} />
+                      </span>
                       {s.name ? <span className="block truncate text-xs text-muted-foreground">{s.name}</span> : null}
                     </th>
                     <td className="px-3 py-2 whitespace-nowrap">

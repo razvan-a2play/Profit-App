@@ -1,6 +1,7 @@
 "use client";
 
 import { count, money } from "@/lib/format";
+import { ClassTag } from "./ClassTag";
 
 export interface AgeNow {
   date: string;
@@ -60,7 +61,10 @@ export function AgePanel({ ageNow, days, names }: { ageNow: AgeNow | null; days:
             {rows.map((r) => (
               <tr key={r.sku} className="border-t border-border">
                 <td className="max-w-[18rem] px-3 py-2">
-                  <div className="font-medium">{r.sku}</div>
+                  <div className="font-medium">
+                    {r.sku}
+                    <ClassTag sku={r.sku} />
+                  </div>
                   {names[r.sku.toUpperCase()] && (
                     <div className="truncate text-xs text-muted-foreground">{names[r.sku.toUpperCase()]}</div>
                   )}

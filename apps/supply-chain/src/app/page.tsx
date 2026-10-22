@@ -3,7 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   aggregatePeriods,
+  classifySkus,
   comparePeriods,
+  monthsForSkus,
+  SKU_CLASSES,
+  type SkuClass,
+  type SkuClassInfo,
   matchScorecard,
   skuPeriodRows,
   type Granularity,
@@ -21,9 +26,10 @@ import { AgePanel, type AgeNow } from "@/components/AgePanel";
 import { Change, changeOf } from "@/components/Change";
 import { Scorecard } from "@/components/Scorecard";
 import { CoverSection } from "@/components/CoverSection";
+import { CLASS_LABEL, CLASS_MEANING, SkuClassContext } from "@/components/ClassTag";
 import { Segmented } from "@/components/ui";
 import { Definitions } from "@/components/PeriodTable";
-import { monthLabel, setCurrency } from "@/lib/format";
+import { count, money, monthLabel, setCurrency } from "@/lib/format";
 import { METRICS, periodLabel, type MetricKey } from "@/lib/metrics";
 
 type SourceState = "ready" | "scanning" | "failed" | "unavailable";
@@ -78,6 +84,7 @@ export default function Page() {
   const [error, setError] = useState<string | null>(null);
   const [pollTick, setPollTick] = useState(0);
   const [tab, setTab] = useState<Tab>("overview");
+  const [segment, setSegment] = useState<"all" | SkuClass>("all");
   const [channel, setChannel] = useState<"fba" | "awd">("fba");
   const [seasonal, setSeasonal] = useState<Record<string, number>>({});
   useEffect(() => {
@@ -162,17 +169,31 @@ export default function Page() {
       isCA ? ps.map((p) => ({ ...p, contributionMargin: null, contributionShare: null, gmroi: null, landedCostPerUnit: null })) : ps,
     [isCA],
   );
+  // Classes are as of the newest month whose fees are read, and stay put
+  // whatever period is on screen: "how did today's top sellers do last year".
+  const asOf = useMemo(() => [...feeReady].sort().at(-1) ?? null, [feeReady]);
+  const classes = useMemo(() => (data && asOf ? classifySkus(data.skus, asOf) : {}), [data, asOf]);
+  const keep = useMemo(
+    () => (segment === "all" ? null : new Set(Object.values(classes).filter((c) => c.cls === segment).map((c) => c.sku))),
+    [classes, segment],
+  );
+  const skusShown = useMemo(() => (data ? (keep ? data.skus.filter((r) => keep.has(r.sku)) : data.skus) : []), [data, keep]);
+  const monthsShown = useMemo(
+    () => (data ? (keep ? monthsForSkus(data.months, data.skus, keep) : data.months) : []),
+    [data, keep],
+  );
+
   const periods = useMemo(
-    () => (data ? noMixedCurrency(aggregatePeriods(data.months, granularity, feeReady)) : []),
-    [data, granularity, feeReady, noMixedCurrency],
+    () => (data ? noMixedCurrency(aggregatePeriods(monthsShown, granularity, feeReady)) : []),
+    [data, monthsShown, granularity, feeReady, noMixedCurrency],
   );
   const monthly = useMemo(
-    () => (data ? noMixedCurrency(aggregatePeriods(data.months, "month", feeReady)) : []),
-    [data, feeReady, noMixedCurrency],
+    () => (data ? noMixedCurrency(aggregatePeriods(monthsShown, "month", feeReady)) : []),
+    [data, monthsShown, feeReady, noMixedCurrency],
   );
   const changes = useMemo(
-    () => (data ? comparePeriods(periods, data.months, feeReady) : new Map()),
-    [data, periods, feeReady],
+    () => (data ? comparePeriods(periods, monthsShown, feeReady) : new Map()),
+    [data, monthsShown, periods, feeReady],
   );
 
   // Default to the newest period whose costs are complete, storage included:
@@ -186,17 +207,29 @@ export default function Page() {
   const vsLabel = compare === "yoy" ? "YoY" : granularity === "month" ? "MoM" : granularity === "quarter" ? "QoQ" : "YoY";
   const baseName = base ? periodLabel(base.key, base.granularity, true) : null;
   const matched = useMemo(
-    () => (data && current ? matchScorecard(current, base, data.months, feeReady) : {}),
-    [data, current, base, feeReady],
+    () => (data && current ? matchScorecard(current, base, monthsShown, feeReady) : {}),
+    [data, monthsShown, current, base, feeReady],
   );
   const agedByMonth = useMemo(
-    () => Object.fromEntries((data?.months ?? []).map((m) => [m.month, m.agedSurcharge])),
-    [data],
+    () => Object.fromEntries(monthsShown.map((m) => [m.month, m.agedSurcharge])),
+    [monthsShown],
   );
   const skuRows = useMemo(
-    () => (data && current ? skuPeriodRows(data.skus, current.months, base?.months ?? null) : []),
-    [data, current, base],
+    () => (data && current ? skuPeriodRows(skusShown, current.months, base?.months ?? null) : []),
+    [data, skusShown, current, base],
   );
+  // A class filter shares out the aged surcharge for months before Amazon's per-SKU aged report:
+  // fine inside the storage totals, but not a fair basis for judging the surcharge itself.
+  const agedEstimated = useMemo(() => {
+    if (!keep || !data || !current) return false;
+    const perSku = new Set(data.skus.filter((r) => r.agedSurcharge != null).map((r) => r.month));
+    return [...current.months, ...(base?.months ?? [])].some((m) => !perSku.has(m));
+  }, [keep, data, current, base]);
+  const classCount = useMemo(() => {
+    const out: Partial<Record<SkuClass, number>> = {};
+    for (const c of Object.values(classes)) out[c.cls] = (out[c.cls] ?? 0) + 1;
+    return out;
+  }, [classes]);
   const names = useMemo(() => {
     const out: Record<string, string> = {};
     for (const r of data?.skus ?? []) if (r.productName) out[r.sku] = r.productName;
@@ -220,6 +253,7 @@ export default function Page() {
   setCurrency(data?.currency ?? "USD");
 
   return (
+    <SkuClassContext.Provider value={classes}>
     <main className="min-h-screen bg-background">
       <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
         <header className="mb-4">
@@ -313,6 +347,15 @@ export default function Page() {
               </>
             ) : null}
             <Segmented
+              label="SKU class"
+              value={segment}
+              options={[
+                ["all", "All SKUs"],
+                ...SKU_CLASSES.map((c) => [c, `${CLASS_LABEL[c]} ${classCount[c] ?? 0}`] as const),
+              ]}
+              onChange={(v) => setSegment(v)}
+            />
+            <Segmented
               label="History loaded"
               value={range}
               options={RANGES.map((r) => [r, r === "all" ? "All" : `${r} mo`] as const)}
@@ -341,6 +384,14 @@ export default function Page() {
           </div>
         </div>
 
+        {segment !== "all" && (
+          <p className="-mt-3 mb-6 text-sm text-muted-foreground">
+            Showing class {CLASS_LABEL[segment]} only ({classCount[segment] ?? 0} SKUs): {CLASS_MEANING[segment].toLowerCase()}, as
+            of {asOf ? monthLabel(asOf, "long") : "the newest month"}. Inbound, removals and other order fees are shared out by units
+            received and sales, and aged surcharge before October 2025 by FBA storage cost; Amazon&apos;s storage utilisation ratio exists for the whole account only.
+          </p>
+        )}
+
         {current && data && (
           <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
             {tab === "overview" && (
@@ -357,7 +408,7 @@ export default function Page() {
                     currentName={periodLabel(current.key, current.granularity)}
                     baseName={base ? periodLabel(base.key, base.granularity) : null}
                     history={monthly}
-                    exclude={isCA ? ["awdStoragePerUnitMonth", "gmroi"] : []}
+                    exclude={[...(isCA ? ["awdStoragePerUnitMonth", "gmroi"] : []), ...(agedEstimated ? ["agedSurcharge"] : [])]}
                     matched={matched}
                   />
                 </section>
@@ -424,7 +475,7 @@ export default function Page() {
                 </p>
                 <CoverSection
                   key={channel}
-                  rows={data.skus}
+                  rows={skusShown}
                   period={current}
                   base={base}
                   agedByMonth={agedByMonth}
@@ -462,6 +513,7 @@ export default function Page() {
                   SKUs in {periodLabel(current.key, current.granularity, true)}
                   {baseName ? <span className="font-normal text-muted-foreground"> · changes vs {baseName}</span> : null}
                 </h2>
+                <ClassSummary classes={classes} asOf={asOf} />
                 <p className="mb-3 text-sm text-muted-foreground">
                   Sales and fulfilment fees per order line; FBA storage from Amazon&apos;s per-ASIN report; AWD processing and
                   transport traced to the shipments and orders that moved each SKU, AWD storage shared by units held.
@@ -486,7 +538,15 @@ export default function Page() {
                     the storage tab.
                   </p>
                 ) : (
-                  <AgePanel ageNow={data.inventory.ageNow} days={data.inventory.snapshotDays} names={names} />
+                  <AgePanel
+                    ageNow={
+                      data.inventory.ageNow && keep
+                        ? { ...data.inventory.ageNow, bySku: Object.fromEntries(Object.entries(data.inventory.ageNow.bySku).filter(([sku]) => keep.has(sku.toUpperCase()))) }
+                        : data.inventory.ageNow
+                    }
+                    days={data.inventory.snapshotDays}
+                    names={names}
+                  />
                 )}
               </section>
             )}
@@ -494,6 +554,7 @@ export default function Page() {
         )}
       </div>
     </main>
+    </SkuClassContext.Provider>
   );
 }
 
@@ -569,4 +630,48 @@ function explain(error?: string): string {
     return "Amazon rejected the gateway's refresh token (invalid_grant). Re-authorise the app in Seller Central and update AMAZON_REFRESH_TOKEN in seller-central-api/.env.";
   }
   return error;
+}
+
+/** How the catalogue splits into classes: SKUs, sales and stock in each. */
+function ClassSummary({ classes, asOf }: { classes: Record<string, SkuClassInfo>; asOf: string | null }) {
+  const all = Object.values(classes);
+  if (!all.length) return null;
+  const total = all.reduce((a, c) => a + c.sales12, 0);
+  return (
+    <div className="mb-6">
+      <h3 className="mb-1 text-sm font-medium">SKU classes{asOf ? `, as of ${monthLabel(asOf, "long")}` : ""}</h3>
+      <p className="mb-2 text-xs text-muted-foreground">
+        Ranked by net sales over the last 12 months. A SKU moves class as its sales move. Use the class filter at the top to
+        see any tab for one class.
+      </p>
+      <div className="overflow-x-auto rounded-lg border border-border">
+        <table className="w-full text-sm">
+          <thead className="bg-muted text-xs text-muted-foreground">
+            <tr>
+              <th scope="col" className="px-3 py-2 text-left font-medium">Class</th>
+              <th scope="col" className="px-3 py-2 text-left font-medium">What it is</th>
+              <th scope="col" className="px-3 py-2 text-right font-medium">SKUs</th>
+              <th scope="col" className="px-3 py-2 text-right font-medium">Net sales, 12 months</th>
+              <th scope="col" className="px-3 py-2 text-right font-medium">Share</th>
+            </tr>
+          </thead>
+          <tbody>
+            {SKU_CLASSES.map((c) => {
+              const rows = all.filter((x) => x.cls === c);
+              const sales = rows.reduce((a, x) => a + x.sales12, 0);
+              return (
+                <tr key={c} className="border-t border-border">
+                  <th scope="row" className="px-3 py-2 text-left font-medium">{CLASS_LABEL[c]}</th>
+                  <td className="px-3 py-2 text-muted-foreground">{CLASS_MEANING[c]}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{count(rows.length)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{money(sales)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{total > 0 ? `${((sales / total) * 100).toFixed(1)}%` : "—"}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
 }

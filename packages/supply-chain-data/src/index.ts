@@ -7,4 +7,5 @@ export * from "./monthly";
 export * from "./inventory";
 export * from "./periods";
 export * from "./scorecard";
+export * from "./segments";
 export * from "./targetCover";

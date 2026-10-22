@@ -98,6 +98,12 @@ export interface SkuInventory {
   awdStorage: number | null;
   agedSurcharge: number | null;
   agedUnits: number | null;
+  /** Holding more than EXCESS_DAYS of cover at its trailing 90-day pace. */
+  excessStock: boolean;
+  /** Share of the month's days its ASIN had sellable stock (on the SKU that owns the ASIN's stock). */
+  inStockShare: number | null;
+  /** Its weight in the in-stock rate: the ASIN's average monthly shipments over six months. */
+  inStockWeight: number | null;
 }
 
 export type InventorySkuRow = SkuMonthRow & SkuInventory;
@@ -456,6 +462,8 @@ export function addInventory(report: MonthlyReport, i: InventoryInputs): Invento
             : null,
         agedSurcharge: agedMonth ? round(aged?.amount ?? 0) : null,
         agedUnits: agedMonth ? aged?.units ?? 0 : null,
+        excessStock: false,
+        ...skuInStock(l ? asinOf.get(sku) : undefined, m, i),
       });
     }
     monthRows.sort((a, b) => b.netSales - a.netSales || (b.inventoryValue ?? 0) - (a.inventoryValue ?? 0));
@@ -474,6 +482,7 @@ export function addInventory(report: MonthlyReport, i: InventoryInputs): Invento
       if (shipped <= 0) return true;
       return end / (shipped / sum(h.map((x) => x.days))) > EXCESS_DAYS;
     };
+    for (const r of monthRows) r.excessStock = isExcess(r);
     skus.push(...monthRows);
 
     // Portfolio: money-weighted turnover over the SKUs with a cost.
@@ -539,6 +548,18 @@ function inStockFor(month: string, i: InventoryInputs): { inStockRate: number | 
     if (rate < 0.95) out++;
   }
   return den > 0 ? { inStockRate: round(num / den, 4), skusStockedOut: out } : { inStockRate: null, skusStockedOut: null };
+}
+
+/** One ASIN's in-stock share and weight for a month, as inStockFor counts it. */
+function skuInStock(asin: string | undefined, month: string, i: InventoryInputs): { inStockShare: number | null; inStockWeight: number | null } {
+  const none = { inStockShare: null, inStockWeight: null };
+  if (!asin || !i.inStock || !i.ledger) return none;
+  const days = (i.inStock[asin] ?? i.inStock[up(asin)])?.[month];
+  const l = i.ledger.asins[asin] ?? i.ledger.asins[up(asin)];
+  if (!days || days[1] === 0 || !l) return none;
+  const window = [0, 1, 2, 3, 4, 5].map((k) => shift(month, -k));
+  const pace = sum(window.map((m) => l[m]?.shipments ?? 0)) / window.length;
+  return pace > 0 ? { inStockShare: days[0] / days[1], inStockWeight: pace } : none;
 }
 
 function shift(month: string, by: number): string {

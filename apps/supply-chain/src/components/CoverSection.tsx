@@ -6,6 +6,7 @@ import { count, money, money2, monthLabel } from "@/lib/format";
 import { periodLabel } from "@/lib/metrics";
 import { DeltaArrow, TONE } from "./ui";
 import { SeasonalPanel } from "./SeasonalPanel";
+import { ClassTag } from "./ClassTag";
 
 /** SKUs listed before "show all". */
 const SKU_ROWS = 15;
@@ -258,7 +259,10 @@ export function CoverSection({
                 {(allSkus ? skus : skus.slice(0, SKU_ROWS)).map((s) => (
                   <tr key={s.sku} className="border-t border-border">
                     <th scope="row" className="max-w-[20rem] px-3 py-2 text-left font-normal">
-                      <span className="block font-medium">{s.sku}</span>
+                      <span className="block font-medium">
+                        {s.sku}
+                        <ClassTag sku={s.sku} />
+                      </span>
                       {s.name ? <span className="block truncate text-xs text-muted-foreground">{s.name}</span> : null}
                     </th>
                     <td className="px-3 py-2 text-right tabular-nums">{(s.demand / s.n).toFixed(1)}</td>
