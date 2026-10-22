@@ -121,6 +121,32 @@ export function aggregatePeriods(
   return [...groups.entries()].map(([key, ms]) => summarise(key, g, ms, feeReady));
 }
 
+/**
+ * One measure compared on only the months both periods have it, when a month
+ * on either side lacks an input (the newest month's AWD bill not yet posted,
+ * or an older month before Amazon's ledger history begins). Null when every
+ * month already counts, or no month pair has the measure on both sides.
+ */
+export function likeForLike(
+  p: PeriodSummary,
+  base: PeriodSummary,
+  months: InventoryMonthSummary[],
+  feeReady: Set<string>,
+  pick: (s: PeriodSummary) => number | null,
+): { current: number; base: number; months: string[]; baseMonths: string[] } | null {
+  const byMonth = new Map(months.map((m) => [m.month, m]));
+  const has = (month: string) => {
+    const m = byMonth.get(month);
+    return m != null && pick(summarise(month, "month", [m], feeReady)) != null;
+  };
+  const pairs = p.months.map((m, i) => [m, base.months[i]] as const).filter(([a, b]) => b != null && has(a) && has(b));
+  if (pairs.length === 0 || pairs.length === p.months.length) return null;
+  const cur = pick(summarise(p.key, p.granularity, pairs.map(([a]) => byMonth.get(a)!), feeReady));
+  const was = pick(summarise(base.key, base.granularity, pairs.map(([, b]) => byMonth.get(b)!), feeReady));
+  if (cur == null || was == null) return null;
+  return { current: cur, base: was, months: pairs.map(([a]) => a), baseMonths: pairs.map(([, b]) => b) };
+}
+
 /** The same months shifted back, summarised the same way — the base of a comparison. */
 function baseFor(p: PeriodSummary, by: number, byMonth: Map<string, InventoryMonthSummary>, feeReady: Set<string>) {
   const shifted = p.months.map((m) => byMonth.get(shiftMonth(m, by)));

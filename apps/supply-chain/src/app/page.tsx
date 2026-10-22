@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   aggregatePeriods,
   comparePeriods,
+  matchScorecard,
   skuPeriodRows,
   type Granularity,
   type InventoryMonthSummary,
@@ -184,6 +185,10 @@ export default function Page() {
 
   const vsLabel = compare === "yoy" ? "YoY" : granularity === "month" ? "MoM" : granularity === "quarter" ? "QoQ" : "YoY";
   const baseName = base ? periodLabel(base.key, base.granularity, true) : null;
+  const matched = useMemo(
+    () => (data && current ? matchScorecard(current, base, data.months, feeReady) : {}),
+    [data, current, base, feeReady],
+  );
   const agedByMonth = useMemo(
     () => Object.fromEntries((data?.months ?? []).map((m) => [m.month, m.agedSurcharge])),
     [data],
@@ -353,6 +358,7 @@ export default function Page() {
                     baseName={base ? periodLabel(base.key, base.granularity) : null}
                     history={monthly}
                     exclude={isCA ? ["awdStoragePerUnitMonth", "gmroi"] : []}
+                    matched={matched}
                   />
                 </section>
 

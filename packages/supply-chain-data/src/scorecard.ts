@@ -11,8 +11,9 @@
 // turnover and storage cost and worsens availability; any one of them alone
 // can be gamed. The balance note says when a gain was bought with stockouts.
 
+import type { InventoryMonthSummary } from "./inventory";
 import type { PeriodSummary } from "./periods";
-import { pctChange, ppChange } from "./periods";
+import { likeForLike, pctChange, ppChange } from "./periods";
 
 export type ScoreVerdict = "improving" | "holding" | "worse" | "unknown";
 
@@ -52,6 +53,28 @@ export interface ScoreRow {
   base: number | null;
   change: number | null;
   verdict: ScoreVerdict;
+  /** Set when the measure was compared on only these months (the ones both periods have it). */
+  months?: string[];
+}
+
+/** Per measure, a like-for-like comparison on fewer months: see likeForLike. */
+export type MatchedMeasures = Partial<Record<string, { current: number; base: number; months: string[] }>>;
+
+/** Like-for-like stand-ins for every scorecard measure one side can't give over the whole period. */
+export function matchScorecard(
+  current: PeriodSummary,
+  base: PeriodSummary | null,
+  months: InventoryMonthSummary[],
+  feeReady: Set<string>,
+): MatchedMeasures {
+  if (!base) return {};
+  const out: MatchedMeasures = {};
+  for (const m of SCORECARD) {
+    if (current[m.key] != null && base[m.key] != null) continue;
+    const r = likeForLike(current, base, months, feeReady, (s) => s[m.key] as number | null);
+    if (r) out[m.key] = r;
+  }
+  return out;
 }
 
 export interface Scorecard {
@@ -74,10 +97,12 @@ export function judge(m: ScoreMeasure, current: number | null, base: number | nu
   return { measure: m, current, base, change, verdict };
 }
 
-export function buildScorecard(current: PeriodSummary, base: PeriodSummary | null): Scorecard {
-  const rows = SCORECARD.map((m) =>
-    judge(m, current[m.key] as number | null, base ? (base[m.key] as number | null) : null),
-  );
+export function buildScorecard(current: PeriodSummary, base: PeriodSummary | null, matched: MatchedMeasures = {}): Scorecard {
+  const rows = SCORECARD.map((m) => {
+    const like = matched[m.key];
+    if (like) return { ...judge(m, like.current, like.base), months: like.months };
+    return judge(m, current[m.key] as number | null, base ? (base[m.key] as number | null) : null);
+  });
   const count = (v: ScoreVerdict) => rows.filter((r) => r.verdict === v).length;
   const v = (k: string) => rows.find((r) => r.measure.key === k)?.verdict;
 

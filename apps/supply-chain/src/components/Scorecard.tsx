@@ -1,6 +1,7 @@
 "use client";
 
-import { buildScorecard, type PeriodSummary, type ScoreRow } from "@platform/supply-chain-data";
+import { buildScorecard, type MatchedMeasures, type PeriodSummary, type ScoreRow } from "@platform/supply-chain-data";
+import { monthLabel } from "@/lib/format";
 import { METRICS, formatChange } from "@/lib/metrics";
 import { DeltaArrow, TONE } from "./ui";
 
@@ -25,6 +26,7 @@ export function Scorecard({
   baseName,
   history,
   exclude = [],
+  matched = {},
 }: {
   current: PeriodSummary;
   base: PeriodSummary | null;
@@ -34,8 +36,10 @@ export function Scorecard({
   history: PeriodSummary[];
   /** Measures that don't apply here (e.g. AWD in Canada): left out, not shown as missing. */
   exclude?: string[];
+  /** Measures compared on only the months both periods have them. */
+  matched?: MatchedMeasures;
 }) {
-  const built = buildScorecard(current, base);
+  const built = buildScorecard(current, base, matched);
   const rows = built.rows.filter((r) => !exclude.includes(r.measure.key));
   const n = (v: string) => rows.filter((r) => r.verdict === v).length;
   const card = { ...built, rows, improving: n("improving"), worse: n("worse"), holding: n("holding"), measured: rows.length - n("unknown") };
@@ -82,7 +86,14 @@ export function Scorecard({
                       {r.measure.partlyExternal ? " · partly set by Amazon's rates and product mix" : ""}
                     </div>
                   </td>
-                  <td className="px-3 py-2 text-right tabular-nums whitespace-nowrap">{m.format(r.current)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums whitespace-nowrap">
+                    {m.format(r.current)}
+                    {r.months ? (
+                      <span className="block text-xs text-muted-foreground" title="Compared on the months both periods have this measure">
+                        {span(r.months)} only
+                      </span>
+                    ) : null}
+                  </td>
                   <td className="px-3 py-2 text-right tabular-nums whitespace-nowrap text-muted-foreground">{m.format(r.base)}</td>
                   <td className="px-3 py-2 text-right tabular-nums whitespace-nowrap">{formatChange(r.change, r.measure.change) || "—"}</td>
                   <td className="px-3 py-2 whitespace-nowrap font-medium" style={{ color: v.color ?? TONE.muted }}>
@@ -100,6 +111,15 @@ export function Scorecard({
       </div>
     </div>
   );
+}
+
+/** "May–Sep" for a run of months, "5 months" for a broken set. */
+function span(months: string[]): string {
+  const [y0, m0] = months[0].split("-").map(Number);
+  const [y1, m1] = months[months.length - 1].split("-").map(Number);
+  const run = (y1 - y0) * 12 + (m1 - m0) + 1 === months.length;
+  const short = (m: string) => monthLabel(m).split(" ")[0];
+  return run ? `${short(months[0])}–${short(months[months.length - 1])}` : `${months.length} months`;
 }
 
 const SW = 140;

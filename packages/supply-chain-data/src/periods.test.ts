@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { InventoryMonthSummary, InventorySkuRow } from "./inventory";
-import { aggregatePeriods, comparePeriods, pctChange, periodKey, ppChange, skuPeriodRows } from "./periods";
+import { aggregatePeriods, comparePeriods, likeForLike, pctChange, periodKey, ppChange, skuPeriodRows } from "./periods";
+import { buildScorecard, matchScorecard } from "./scorecard";
 
 /** A month with round numbers: everything scales with `k`. */
 function month(m: string, k = 1, over: Partial<InventoryMonthSummary> = {}): InventoryMonthSummary {
@@ -115,5 +116,46 @@ describe("skuPeriodRows", () => {
     expect(r.fbaUnitsEnd).toBe(400);
     expect(r.awdCost).toBe(10);
     expect(r.netSalesChange).toBe(3);
+  });
+});
+
+describe("like-for-like on fewer months", () => {
+  // Q3 2026 has no September AWD bill yet; Q3 2025 has no ledger for July.
+  const months = [
+    month("2025-07", 1, { inStockRate: null }),
+    month("2025-08", 1, { inStockRate: 0.9 }),
+    month("2025-09", 1, { inStockRate: 0.9 }),
+    month("2026-07", 2, { inStockRate: 0.99 }),
+    month("2026-08", 2, { inStockRate: 0.99 }),
+    month("2026-09", 2, { awdStorage: null, inStockRate: 0.99 }),
+  ];
+  const ready = new Set(months.map((m) => m.month));
+  const q = aggregatePeriods(months, "quarter", ready);
+  const cur = q.find((p) => p.key === "2026-Q3")!;
+  const base = comparePeriods(q, months, ready).get("2026-Q3")!.yoy!;
+
+  it("compares a measure on the months both sides have it", () => {
+    expect(cur.storageShareOfSales).toBeNull();
+    const r = likeForLike(cur, base, months, ready, (s) => s.storageShareOfSales)!;
+    expect(r.months).toEqual(["2026-07", "2026-08"]);
+    expect(r.baseMonths).toEqual(["2025-07", "2025-08"]);
+    expect(r.current).toBeCloseTo(510 / 20000, 4);
+  });
+
+  it("drops the base's missing months from both sides", () => {
+    const r = likeForLike(cur, base, months, ready, (s) => s.inStockRate)!;
+    expect(r.months).toEqual(["2026-08", "2026-09"]);
+    expect(r.base).toBeCloseTo(0.9, 4);
+  });
+
+  it("leaves a measure alone when every month has it", () => {
+    expect(likeForLike(cur, base, months, ready, (s) => s.fulfilmentPerUnit)).toBeNull();
+  });
+
+  it("feeds the scorecard, which says which months it used", () => {
+    const card = buildScorecard(cur, base, matchScorecard(cur, base, months, ready));
+    const row = card.rows.find((r) => r.measure.key === "inStockRate")!;
+    expect(row.verdict).toBe("improving");
+    expect(row.months).toEqual(["2026-08", "2026-09"]);
   });
 });
