@@ -435,7 +435,7 @@ export default function Page() {
             Showing {[...keep].filter((sku) => classes[sku]).length} SKUs:{" "}
             {segment !== "all" ? `class ${CLASS_LABEL[segment]} (${CLASS_MEANING[segment].toLowerCase()}, as of ${asOf ? monthLabel(asOf, "long") : "the newest month"})` : "every class"}
             {category !== "all" ? `, ${category ? `category ${category}` : "no category in the Product Library"}` : ""}. Inbound, removals and other order fees are shared out by units
-            received and sales, and aged surcharge before October 2025 by FBA storage cost; Amazon&apos;s storage utilisation ratio exists for the whole account only.
+            received and sales, and aged surcharge before October 2025 by FBA storage cost; Amazon&apos;s storage utilisation ratio exists for the whole account only, so it&apos;s left out.
           </p>
         )}
 
@@ -455,7 +455,12 @@ export default function Page() {
                     currentName={periodLabel(current.key, current.granularity)}
                     baseName={base ? periodLabel(base.key, base.granularity) : null}
                     history={monthly}
-                    exclude={[...(isCA ? ["awdStoragePerUnitMonth", "gmroi"] : []), ...(agedEstimated ? ["agedSurcharge"] : [])]}
+                    exclude={[
+                      ...(isCA ? ["awdStoragePerUnitMonth", "gmroi"] : []),
+                      ...(agedEstimated ? ["agedSurcharge"] : []),
+                      // Amazon publishes the utilisation ratio for the whole account only.
+                      ...(keep ? ["utilizationWeeks"] : []),
+                    ]}
                     matched={matched}
                   />
                 </section>
