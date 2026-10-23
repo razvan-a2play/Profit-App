@@ -26,7 +26,7 @@ import { AgePanel, type AgeNow } from "@/components/AgePanel";
 import { Change, changeOf } from "@/components/Change";
 import { Scorecard } from "@/components/Scorecard";
 import { CoverSection } from "@/components/CoverSection";
-import { CLASS_LABEL, CLASS_MEANING, SkuClassContext } from "@/components/ClassTag";
+import { CategoryContext, CLASS_LABEL, CLASS_MEANING, SkuClassContext } from "@/components/ClassTag";
 import { Segmented } from "@/components/ui";
 import { Definitions } from "@/components/PeriodTable";
 import { count, money, monthLabel, setCurrency } from "@/lib/format";
@@ -51,6 +51,10 @@ interface Payload {
     snapshotDays: number;
     ageNow: AgeNow | null;
   };
+  /** SKU -> category (product line) from the Product Library. */
+  categories: Record<string, string>;
+  categoryLines: string[];
+  categoriesError: string | null;
   error?: string;
 }
 
@@ -85,6 +89,8 @@ export default function Page() {
   const [pollTick, setPollTick] = useState(0);
   const [tab, setTab] = useState<Tab>("overview");
   const [segment, setSegment] = useState<"all" | SkuClass>("all");
+  /** "all", a product line, or "" for SKUs with no category in the Library. */
+  const [category, setCategory] = useState<string>("all");
   const [channel, setChannel] = useState<"fba" | "awd">("fba");
   const [seasonal, setSeasonal] = useState<Record<string, number>>({});
   useEffect(() => {
@@ -173,10 +179,19 @@ export default function Page() {
   // whatever period is on screen: "how did today's top sellers do last year".
   const asOf = useMemo(() => [...feeReady].sort().at(-1) ?? null, [feeReady]);
   const classes = useMemo(() => (data && asOf ? classifySkus(data.skus, asOf) : {}), [data, asOf]);
-  const keep = useMemo(
-    () => (segment === "all" ? null : new Set(Object.values(classes).filter((c) => c.cls === segment).map((c) => c.sku))),
-    [classes, segment],
-  );
+  // Class and category narrow together: "A sellers among the splash pads".
+  const keep = useMemo(() => {
+    if (segment === "all" && category === "all") return null;
+    const cats = data?.categories ?? {};
+    const skus = new Set([...(data?.skus ?? []).map((r) => r.sku)]);
+    return new Set(
+      [...skus].filter(
+        (sku) =>
+          (segment === "all" || classes[sku]?.cls === segment) &&
+          (category === "all" || (cats[sku] ?? "") === category),
+      ),
+    );
+  }, [classes, segment, category, data]);
   const skusShown = useMemo(() => (data ? (keep ? data.skus.filter((r) => keep.has(r.sku)) : data.skus) : []), [data, keep]);
   const monthsShown = useMemo(
     () => (data ? (keep ? monthsForSkus(data.months, data.skus, keep) : data.months) : []),
@@ -225,6 +240,15 @@ export default function Page() {
     const perSku = new Set(data.skus.filter((r) => r.agedSurcharge != null).map((r) => r.month));
     return [...current.months, ...(base?.months ?? [])].some((m) => !perSku.has(m));
   }, [keep, data, current, base]);
+  // SKUs per category, among those with a class (sold or held stock).
+  const categoryCount = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const sku of Object.keys(classes)) {
+      const c = data?.categories[sku] ?? "";
+      out[c] = (out[c] ?? 0) + 1;
+    }
+    return out;
+  }, [classes, data]);
   const classCount = useMemo(() => {
     const out: Partial<Record<SkuClass, number>> = {};
     for (const c of Object.values(classes)) out[c.cls] = (out[c.cls] ?? 0) + 1;
@@ -254,6 +278,7 @@ export default function Page() {
 
   return (
     <SkuClassContext.Provider value={classes}>
+    <CategoryContext.Provider value={data?.categories ?? {}}>
     <main className="min-h-screen bg-background">
       <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
         <header className="mb-4">
@@ -355,6 +380,27 @@ export default function Page() {
               ]}
               onChange={(v) => setSegment(v)}
             />
+            {data && data.categoryLines.length ? (
+              <>
+                <label htmlFor="category" className="sr-only">
+                  Category
+                </label>
+                <select
+                  id="category"
+                  value={category}
+                  onChange={(e) => setCategory(e.target.value)}
+                  className="h-11 rounded-md border border-input bg-background px-2 sm:h-8"
+                >
+                  <option value="all">All categories</option>
+                  {data.categoryLines.map((l) => (
+                    <option key={l} value={l}>
+                      {l} ({categoryCount[l] ?? 0})
+                    </option>
+                  ))}
+                  <option value="">No category in Product Library ({categoryCount[""] ?? 0})</option>
+                </select>
+              </>
+            ) : null}
             <Segmented
               label="History loaded"
               value={range}
@@ -384,10 +430,11 @@ export default function Page() {
           </div>
         </div>
 
-        {segment !== "all" && (
+        {keep && (
           <p className="-mt-3 mb-6 text-sm text-muted-foreground">
-            Showing class {CLASS_LABEL[segment]} only ({classCount[segment] ?? 0} SKUs): {CLASS_MEANING[segment].toLowerCase()}, as
-            of {asOf ? monthLabel(asOf, "long") : "the newest month"}. Inbound, removals and other order fees are shared out by units
+            Showing {[...keep].filter((sku) => classes[sku]).length} SKUs:{" "}
+            {segment !== "all" ? `class ${CLASS_LABEL[segment]} (${CLASS_MEANING[segment].toLowerCase()}, as of ${asOf ? monthLabel(asOf, "long") : "the newest month"})` : "every class"}
+            {category !== "all" ? `, ${category ? `category ${category}` : "no category in the Product Library"}` : ""}. Inbound, removals and other order fees are shared out by units
             received and sales, and aged surcharge before October 2025 by FBA storage cost; Amazon&apos;s storage utilisation ratio exists for the whole account only.
           </p>
         )}
@@ -514,6 +561,7 @@ export default function Page() {
                   {baseName ? <span className="font-normal text-muted-foreground"> · changes vs {baseName}</span> : null}
                 </h2>
                 <ClassSummary classes={classes} asOf={asOf} />
+                <CategorySummary classes={classes} categories={data.categories} lines={data.categoryLines} error={data.categoriesError} />
                 <p className="mb-3 text-sm text-muted-foreground">
                   Sales and fulfilment fees per order line; FBA storage from Amazon&apos;s per-ASIN report; AWD processing and
                   transport traced to the shipments and orders that moved each SKU, AWD storage shared by units held.
@@ -554,6 +602,7 @@ export default function Page() {
         )}
       </div>
     </main>
+    </CategoryContext.Provider>
     </SkuClassContext.Provider>
   );
 }
@@ -669,6 +718,66 @@ function ClassSummary({ classes, asOf }: { classes: Record<string, SkuClassInfo>
                 </tr>
               );
             })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/** Sales and class mix per category (product line), over the same 12 months as the classes. */
+function CategorySummary({
+  classes,
+  categories,
+  lines,
+  error,
+}: {
+  classes: Record<string, SkuClassInfo>;
+  categories: Record<string, string>;
+  lines: string[];
+  error: string | null;
+}) {
+  const all = Object.values(classes);
+  if (!all.length) return null;
+  const total = all.reduce((a, c) => a + c.sales12, 0);
+  const groups = [...lines, ""].map((line) => {
+    const rows = all.filter((c) => (categories[c.sku] ?? "") === line);
+    const sales = rows.reduce((a, c) => a + c.sales12, 0);
+    const mix = SKU_CLASSES.map((k) => [k, rows.filter((r) => r.cls === k).length] as const).filter(([, n]) => n > 0);
+    return { line, rows, sales, mix };
+  });
+  return (
+    <div className="mb-6">
+      <h3 className="mb-1 text-sm font-medium">Categories</h3>
+      <p className="mb-2 text-xs text-muted-foreground">
+        Each SKU&apos;s product line in the Product Library. Use the category filter at the top to see any tab for one category.
+        {error ? ` The Library couldn't be read just now (${error}); these are the last categories it gave.` : ""}
+      </p>
+      <div className="overflow-x-auto rounded-lg border border-border">
+        <table className="w-full text-sm">
+          <thead className="bg-muted text-xs text-muted-foreground">
+            <tr>
+              <th scope="col" className="px-3 py-2 text-left font-medium">Category</th>
+              <th scope="col" className="px-3 py-2 text-right font-medium">SKUs</th>
+              <th scope="col" className="px-3 py-2 text-left font-medium">By class</th>
+              <th scope="col" className="px-3 py-2 text-right font-medium">Net sales, 12 months</th>
+              <th scope="col" className="px-3 py-2 text-right font-medium">Share</th>
+            </tr>
+          </thead>
+          <tbody>
+            {groups
+              .filter((g) => g.rows.length)
+              .map((g) => (
+                <tr key={g.line || "none"} className="border-t border-border">
+                  <th scope="row" className="px-3 py-2 text-left font-medium">
+                    {g.line || <span className="font-normal text-muted-foreground">No category in Product Library</span>}
+                  </th>
+                  <td className="px-3 py-2 text-right tabular-nums">{count(g.rows.length)}</td>
+                  <td className="px-3 py-2 text-muted-foreground whitespace-nowrap">{g.mix.map(([k, n]) => `${n} ${CLASS_LABEL[k]}`).join(" · ")}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{money(g.sales)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{total > 0 ? `${((g.sales / total) * 100).toFixed(1)}%` : "—"}</td>
+                </tr>
+              ))}
           </tbody>
         </table>
       </div>

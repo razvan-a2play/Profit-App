@@ -23,6 +23,7 @@ import {
   type CachedMonth,
 } from "@platform/supply-chain-data/monthCosts";
 import { DATA_DIR, earliestReadableMonth, getCatalogue, getGateway, getHeliumMonths, getUnitCosts } from "@/lib/server";
+import { categoryOf, getCategories } from "@/lib/productLibrary";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -197,12 +198,23 @@ export async function GET(req: Request) {
     return row;
   });
 
+  // Each SKU's category (product line) from the Product Library.
+  const cats = await getCategories();
+  const categories: Record<string, string> = {};
+  for (const sku of new Set(skus.map((r) => r.sku))) {
+    const c = categoryOf(cats, sku);
+    if (c) categories[sku] = c;
+  }
+
   return NextResponse.json({
     ...report,
     market,
     currency: market === "CA" ? "CAD" : "USD",
     skus,
     productNames,
+    categories,
+    categoryLines: cats.lines,
+    categoriesError: cats.error ?? null,
     inventory: {
       ledger: sourceState(ledger),
       awd: market !== "US" ? "unavailable" : awdRows && awdMovements?.shipments ? sourceState(awdMovements) : awdNow == null ? "unavailable" : sourceState(awdMovements),

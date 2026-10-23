@@ -5,6 +5,8 @@ import { CLASS_A_SHARE, CLASS_B_SHARE, DORMANT_MONTHS, NEW_MONTHS, type SkuClass
 
 /** Every SKU's class, as of the newest closed month, for any table that lists SKUs. */
 export const SkuClassContext = createContext<Record<string, SkuClassInfo>>({});
+/** Every SKU's category (its product line in the Product Library). */
+export const CategoryContext = createContext<Record<string, string>>({});
 
 export const CLASS_LABEL: Record<SkuClass, string> = {
   A: "A",
@@ -22,17 +24,22 @@ export const CLASS_MEANING: Record<SkuClass, string> = {
   dormant: `Holding stock with no sale in the last ${DORMANT_MONTHS} months`,
 };
 
-/** The SKU's class as a small label beside its name; nothing for a SKU with no class. */
+/** The SKU's class as a small label beside its name, then its category; nothing for what isn't known. */
 export function ClassTag({ sku }: { sku: string }) {
   const info = useContext(SkuClassContext)[sku.toUpperCase()];
-  if (!info) return null;
-  const share = info.share != null ? ` · ${(info.share * 100).toFixed(1)}% of sales` : "";
+  const category = useContext(CategoryContext)[sku.toUpperCase()];
+  const share = info?.share != null ? ` · ${(info.share * 100).toFixed(1)}% of sales` : "";
   return (
-    <span
-      title={`${CLASS_MEANING[info.cls]}${share}`}
-      className="ml-1.5 inline-block rounded border border-border px-1 align-[1px] text-[11px] font-medium leading-4 text-muted-foreground"
-    >
-      {CLASS_LABEL[info.cls]}
-    </span>
+    <>
+      {info ? (
+        <span
+          title={`${CLASS_MEANING[info.cls]}${share}`}
+          className="ml-1.5 inline-block rounded border border-border px-1 align-[1px] text-[11px] font-medium leading-4 text-muted-foreground"
+        >
+          {CLASS_LABEL[info.cls]}
+        </span>
+      ) : null}
+      {category ? <span className="ml-1.5 text-xs font-normal text-muted-foreground">{category}</span> : null}
+    </>
   );
 }
