@@ -43,7 +43,8 @@ export const SCORECARD: ScoreMeasure[] = [
   { key: "storageShareOfSales", label: "Storage % of sales", lever: "Stock levels and placement", better: -1, change: "pp", tolerance: 0.001 },
   { key: "awdStoragePerUnitMonth", label: "AWD storage / unit-month", lever: "How long stock waits at AWD", better: -1, change: "pct", tolerance: 0.05 },
   { key: "inboundPerUnitReceived", label: "Inbound cost / unit received", lever: "Placement option, carton and shipment set-up", better: -1, change: "pct", tolerance: 0.05 },
-  { key: "fulfilmentPerUnit", label: "Fulfilment fee / unit", lever: "Packaging and size tier", better: -1, change: "pct", tolerance: 0.03, partlyExternal: true },
+  // Fulfilment fee per unit is left out: Amazon sets the rate card and the size
+  // tier follows the product, so it moves without the supply chain moving.
   { key: "gmroi", label: "GMROI", lever: "The outcome of all of the above", better: 1, change: "pct", tolerance: 0.05 },
 ];
 

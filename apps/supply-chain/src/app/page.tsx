@@ -67,7 +67,7 @@ type Tab = (typeof TABS)[number][0];
 const POLL_MS = 20_000;
 
 const HEADLINE: MetricKey[][] = [
-  ["netSales", "supplyChainCost", "supplyChainShareOfSales", "fulfilmentPerUnit", "storageShareOfSales", "contributionShare"],
+  ["netSales", "supplyChainCost", "supplyChainShareOfSales", "controllablePerUnit", "storageShareOfSales", "contributionShare"],
   ["turnover", "daysOfInventory", "inventoryValue", "sellThrough", "excessShare", "gmroi"],
 ];
 
