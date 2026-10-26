@@ -1,0 +1,81 @@
+/*
+ * A2 Play brand as CSS variables. Same values as tokens.cjs (hex there, HSL
+ * here for the shadcn components in @platform/ui); change both together.
+ *
+ * Import once, after your own globals, so it wins over older token blocks.
+ * Light only for now: internal apps run on office screens.
+ */
+:root {
+  color-scheme: light;
+
+  /* Brand, for plain CSS */
+  --a2-splash-100: #e3f2fb;
+  --a2-splash-400: #2fa6e0;
+  --a2-splash-600: #0f6fae;
+  --a2-splash-700: #0b5e96;
+  --a2-sun: #ffc23d;
+  --a2-ink: #0e2a47;
+  --a2-ink-muted: #4a6178;
+  --a2-ground: #f4f8fb;
+  --a2-line: #d9e4ee;
+  --a2-font-display: "Baloo 2", ui-rounded, system-ui, sans-serif;
+  --a2-font-sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  /* shadcn semantic colours (HSL triplets, read as hsl(var(--x))) */
+  --background: 205.7 46.7% 97.1%;
+  --foreground: 210.5 67.1% 16.7%;
+
+  --card: 0 0% 100%;
+  --card-foreground: 210.5 67.1% 16.7%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 210.5 67.1% 16.7%;
+
+  --primary: 203.8 84.1% 37.1%;
+  --primary-foreground: 0 0% 100%;
+  --primary-light: 202.5 75% 93.7%;
+  --primary-dark: 204.2 86.3% 31.6%;
+
+  --secondary: 210 30.8% 94.9%;
+  --secondary-foreground: 210.5 67.1% 16.7%;
+
+  --muted: 210 30.8% 94.9%;
+  --muted-foreground: 210 23.7% 38%;
+
+  /* shadcn uses accent for menu hovers, so it is the soft blue, not Sun */
+  --accent: 202.5 75% 93.7%;
+  --accent-foreground: 204.2 86.3% 31.6%;
+  --accent-light: 202.5 75% 93.7%;
+
+  --warning: 38.9 100% 23.9%;
+  --warning-foreground: 0 0% 100%;
+  --warning-light: 42.4 100% 92%;
+
+  --success: 150.4 56.2% 26.9%;
+  --success-foreground: 0 0% 100%;
+  --success-light: 150 42.1% 92.5%;
+
+  --info: 203.8 84.1% 37.1%;
+  --info-foreground: 0 0% 100%;
+  --info-light: 202.5 75% 93.7%;
+
+  --destructive: 3.4 72.3% 38.2%;
+  --destructive-foreground: 0 0% 100%;
+
+  --good: 150.4 56.2% 26.9%;
+  --bad: 3.4 72.3% 38.2%;
+
+  --border: 208.6 38.2% 89.2%;
+  --input: 208 34.9% 83.1%;
+  --ring: 203.8 84.1% 37.1%;
+
+  --radius: 0.5rem;
+
+  --sidebar-background: 210.5 67.1% 16.7%;
+  --sidebar-foreground: 207.5 41.4% 88.6%;
+  --sidebar-primary: 0 0% 100%;
+  --sidebar-primary-foreground: 210.5 67.1% 16.7%;
+  --sidebar-accent: 210.9 56.5% 24.3%;
+  --sidebar-accent-foreground: 0 0% 100%;
+  --sidebar-border: 210.9 56.5% 24.3%;
+  --sidebar-ring: 199.7 74.1% 53.1%;
+}

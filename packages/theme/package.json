@@ -1,0 +1,14 @@
+{
+  "name": "@platform/theme",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A2 Play brand: the SplashEZ look for every internal app.",
+  "sideEffects": ["**/*.css"],
+  "exports": {
+    "./tokens": "./tokens.cjs",
+    "./tokens.css": "./tokens.css",
+    "./tailwind.preset.cjs": "./tailwind.preset.cjs",
+    "./assets/*": "./assets/*"
+  },
+  "files": ["tokens.cjs", "tokens.css", "tailwind.preset.cjs", "assets"]
+}
