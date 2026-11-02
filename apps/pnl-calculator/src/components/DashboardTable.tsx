@@ -160,7 +160,9 @@ export default function DashboardTable() {
               <Th>Status</Th>
               <Th className="text-left">Country</Th>
               <Th>Desired price</Th>
-              <Th>COGS</Th>
+              <Th>COGS<br/><span className="font-normal normal-case opacity-70">app</span></Th>
+              <Th>COGS<br/><span className="font-normal normal-case opacity-70">Helium10</span></Th>
+              <Th>Δ COGS</Th>
               <Th>Referral</Th>
               <Th>FBA fee</Th>
               <Th>Ship&nbsp;+&nbsp;Storage</Th>
@@ -226,6 +228,21 @@ export default function DashboardTable() {
                     )}
                   </Td>
                   <Td className="text-right font-mono">{m ? fmt$(m.cogs) : "—"}</Td>
+                  <Td
+                    className="text-right font-mono"
+                    title={
+                      row.helium10?.fetchedAt
+                        ? `Helium10 — fetched ${new Date(row.helium10.fetchedAt).toLocaleDateString()}`
+                        : undefined
+                    }
+                  >
+                    {row.helium10?.totalCogs != null ? fmt$(row.helium10.totalCogs) : "—"}
+                  </Td>
+                  <Td
+                    className={`text-right font-mono text-xs ${deltaColor(m?.cogs, row.helium10?.totalCogs ?? null)}`}
+                  >
+                    {deltaLabel(m?.cogs, row.helium10?.totalCogs ?? null)}
+                  </Td>
                   <Td className="text-right font-mono">{m ? fmt$(m.referralFee) : "—"}</Td>
                   <Td className="text-right font-mono">{m ? fmt$(m.fbaFee) : "—"}</Td>
                   <Td className="text-right font-mono">{m ? fmt$(m.shippingStorage) : "—"}</Td>
@@ -348,6 +365,22 @@ function StatusBadge({ status, inline = false }: { status: VersionStatus; inline
       {c.label}
     </span>
   );
+}
+
+function deltaLabel(app: number | undefined, h10: number | null): string {
+  if (app === undefined || h10 === null) return "—";
+  const d = h10 - app;
+  if (Math.abs(d) < 0.005) return "match";
+  const sign = d > 0 ? "+" : "";
+  const pct = app > 0 ? ` (${sign}${((d / app) * 100).toFixed(0)}%)` : "";
+  return `${sign}${d.toFixed(2)}${pct}`;
+}
+function deltaColor(app: number | undefined, h10: number | null): string {
+  if (app === undefined || h10 === null) return "text-muted-foreground";
+  const d = h10 - app;
+  if (Math.abs(d) < 0.005) return "text-muted-foreground";
+  if (app > 0 && Math.abs(d / app) < 0.05) return "text-success";
+  return "text-warning";
 }
 
 function fmt$(v: number): string {
