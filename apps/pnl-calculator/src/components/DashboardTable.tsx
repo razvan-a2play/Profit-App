@@ -42,7 +42,7 @@ export default function DashboardTable() {
         acc[r.versionStatus]++;
         return acc;
       },
-      { all: 0, live: 0, rd: 0, none: 0 },
+      { all: 0, live: 0, rd: 0, "h10-only": 0, none: 0 },
     );
   }, [rows]);
 
@@ -115,7 +115,7 @@ export default function DashboardTable() {
             active={statusFilter === "withVersion"}
             onClick={() => setStatusFilter("withVersion")}
           >
-            Live + R&amp;D ({counts.live + counts.rd})
+            Has data ({counts.live + counts.rd + counts["h10-only"]})
           </FilterButton>
           <FilterButton active={statusFilter === "live"} onClick={() => setStatusFilter("live")}>
             Live only ({counts.live})
@@ -300,7 +300,8 @@ export default function DashboardTable() {
         Dashboard edits are a <strong>local what-if</strong> — they never touch saved snapshots.
         Status: <StatusBadge status="live" inline /> uses the latest live snapshot ·{" "}
         <StatusBadge status="rd" inline /> no live yet, R&amp;D plan shown ·{" "}
-        <StatusBadge status="none" inline /> SKU exists in Product Information but no cost saved.
+        <StatusBadge status="h10-only" inline /> no app version; row synthesised from Helium10 COGS + Product Information dimensions + default fees — type a desired price to see margin ·{" "}
+        <StatusBadge status="none" inline /> no cost data anywhere yet.
         Margin colour: <span className="text-success">≥25%</span> ·{" "}
         <span className="text-warning">15–25%</span> ·{" "}
         <span className="text-destructive">&lt;15%</span>
@@ -351,6 +352,10 @@ function StatusBadge({ status, inline = false }: { status: VersionStatus; inline
   > = {
     live: { label: "LIVE", cls: "bg-success/15 text-success border-success/30" },
     rd: { label: "R&D", cls: "bg-info/15 text-info border-info/30" },
+    "h10-only": {
+      label: "H10 ONLY",
+      cls: "bg-warning/15 text-warning border-warning/30",
+    },
     none: {
       label: "NOT COSTED",
       cls: "bg-muted text-muted-foreground border-border",
