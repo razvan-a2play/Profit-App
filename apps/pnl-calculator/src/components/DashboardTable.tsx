@@ -3,12 +3,14 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Button, Input, useToast } from "@platform/ui";
-import { loadDashboardRows, type DashboardRow } from "@/lib/dashboard-data";
+import { loadDashboardRows, type DashboardRow, type VersionStatus } from "@/lib/dashboard-data";
 import { computeMetrics } from "@/lib/dashboard-calc";
 
 interface Overrides {
   [sku: string]: { desiredPrice?: number; tacosPercent?: number };
 }
+
+type StatusFilter = "all" | "live" | "withVersion" | "none";
 
 export default function DashboardTable() {
   const { toast } = useToast();
@@ -16,6 +18,7 @@ export default function DashboardTable() {
   const [error, setError] = useState<string | null>(null);
   const [overrides, setOverrides] = useState<Overrides>({});
   const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("withVersion");
 
   useEffect(() => {
     let cancelled = false;
@@ -31,22 +34,41 @@ export default function DashboardTable() {
     };
   }, []);
 
+  const counts = useMemo(() => {
+    if (!rows) return { all: 0, live: 0, rd: 0, none: 0 };
+    return rows.reduce(
+      (acc, r) => {
+        acc.all++;
+        acc[r.versionStatus]++;
+        return acc;
+      },
+      { all: 0, live: 0, rd: 0, none: 0 },
+    );
+  }, [rows]);
+
   const filteredRows = useMemo(() => {
     if (!rows) return null;
+    let r = rows;
+    if (statusFilter === "live") r = r.filter((x) => x.versionStatus === "live");
+    else if (statusFilter === "withVersion") r = r.filter((x) => x.versionStatus !== "none");
+    else if (statusFilter === "none") r = r.filter((x) => x.versionStatus === "none");
+
     const q = search.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter((r) => {
-      const hay = `${r.sku} ${r.asin ?? ""} ${r.productName}`.toLowerCase();
-      return hay.includes(q);
-    });
-  }, [rows, search]);
+    if (q) {
+      r = r.filter((x) => `${x.sku} ${x.asin ?? ""} ${x.productName}`.toLowerCase().includes(q));
+    }
+    return r;
+  }, [rows, search, statusFilter]);
 
-  const getDesiredPrice = (r: DashboardRow) =>
-    overrides[r.sku]?.desiredPrice ?? Number(r.versionData.sellingPrice ?? 0);
-  const getTacosPercent = (r: DashboardRow) =>
-    overrides[r.sku]?.tacosPercent ?? Number(r.versionData.marketingTacosPercentage ?? 0);
+  const getDesiredPrice = (r: DashboardRow): number =>
+    overrides[r.sku]?.desiredPrice ?? Number(r.versionData?.sellingPrice ?? 0);
+  const getTacosPercent = (r: DashboardRow): number =>
+    overrides[r.sku]?.tacosPercent ?? Number(r.versionData?.marketingTacosPercentage ?? 0);
 
-  const setOverride = (sku: string, patch: Partial<{ desiredPrice: number; tacosPercent: number }>) => {
+  const setOverride = (
+    sku: string,
+    patch: Partial<{ desiredPrice: number; tacosPercent: number }>,
+  ) => {
     setOverrides((prev) => ({ ...prev, [sku]: { ...prev[sku], ...patch } }));
   };
 
@@ -63,13 +85,14 @@ export default function DashboardTable() {
     );
   }
   if (!rows) {
-    return <div className="p-8 text-muted-foreground">Loading live SKUs…</div>;
+    return <div className="p-8 text-muted-foreground">Loading SKUs…</div>;
   }
   if (rows.length === 0) {
     return (
       <div className="p-8">
         <p className="text-muted-foreground">
-          No live snapshots found. Save a version with bucket = <code>live</code> in the calculator first.
+          No SKUs found. Add rows to <code>Product Information</code> or save a version in the
+          calculator.
         </p>
       </div>
     );
@@ -87,10 +110,30 @@ export default function DashboardTable() {
           onChange={(e) => setSearch(e.target.value)}
           className="max-w-md"
         />
+        <div className="flex gap-1 border rounded-md p-0.5 bg-muted/40 text-xs">
+          <FilterButton
+            active={statusFilter === "withVersion"}
+            onClick={() => setStatusFilter("withVersion")}
+          >
+            Live + R&amp;D ({counts.live + counts.rd})
+          </FilterButton>
+          <FilterButton active={statusFilter === "live"} onClick={() => setStatusFilter("live")}>
+            Live only ({counts.live})
+          </FilterButton>
+          <FilterButton active={statusFilter === "none"} onClick={() => setStatusFilter("none")}>
+            Not costed ({counts.none})
+          </FilterButton>
+          <FilterButton active={statusFilter === "all"} onClick={() => setStatusFilter("all")}>
+            All ({counts.all})
+          </FilterButton>
+        </div>
         <div className="text-sm text-muted-foreground">
-          {filteredRows?.length ?? 0} of {rows.length} live SKUs
+          {filteredRows?.length ?? 0} shown
           {editedCount > 0 && (
-            <> · <span className="text-warning font-medium">{editedCount} edited (local only)</span></>
+            <>
+              {" · "}
+              <span className="text-warning font-medium">{editedCount} edited (local only)</span>
+            </>
           )}
         </div>
         <div className="ml-auto flex gap-2">
@@ -114,6 +157,7 @@ export default function DashboardTable() {
               <Th className="text-left min-w-[220px]">Product Name</Th>
               <Th className="text-left">ASIN</Th>
               <Th className="text-left">SKU</Th>
+              <Th>Status</Th>
               <Th className="text-left">Country</Th>
               <Th>Desired price</Th>
               <Th>COGS</Th>
@@ -129,17 +173,22 @@ export default function DashboardTable() {
           </thead>
           <tbody>
             {filteredRows!.map((row, idx) => {
+              const edited = overrides[row.sku];
+              const hasData = row.versionData !== null;
               const desiredPrice = getDesiredPrice(row);
               const tacosPercent = getTacosPercent(row);
-              const m = computeMetrics(row.versionData, desiredPrice, tacosPercent);
+              const m = hasData
+                ? computeMetrics(row.versionData!, desiredPrice, tacosPercent)
+                : null;
               const marginBand =
-                m.netProfitPercent >= 25 ? "good" : m.netProfitPercent >= 15 ? "ok" : "bad";
-              const edited = overrides[row.sku];
+                !m ? "none" : m.netProfitPercent >= 25 ? "good" : m.netProfitPercent >= 15 ? "ok" : "bad";
 
               return (
                 <tr
                   key={row.sku}
-                  className={`border-t hover:bg-muted/40 ${edited ? "bg-warning-light/30" : ""}`}
+                  className={`border-t hover:bg-muted/40 ${edited ? "bg-warning-light/30" : ""} ${
+                    !hasData ? "opacity-70" : ""
+                  }`}
                 >
                   <Td className="text-muted-foreground">{idx + 1}</Td>
                   <Td className="max-w-[280px]">
@@ -147,52 +196,68 @@ export default function DashboardTable() {
                       {row.productName}
                     </div>
                     {row.supplier && (
-                      <div className="text-xs text-muted-foreground truncate" title={row.supplier}>
+                      <div
+                        className="text-xs text-muted-foreground truncate"
+                        title={row.supplier}
+                      >
                         {row.supplier}
                       </div>
                     )}
                   </Td>
                   <Td className="font-mono text-xs">{row.asin ?? "—"}</Td>
                   <Td className="font-mono text-xs">{row.sku}</Td>
+                  <Td>
+                    <StatusBadge status={row.versionStatus} />
+                  </Td>
                   <Td>US</Td>
                   <Td>
-                    <Input
-                      type="number"
-                      step="0.01"
-                      value={desiredPrice}
-                      onChange={(e) =>
-                        setOverride(row.sku, { desiredPrice: parseFloat(e.target.value) || 0 })
-                      }
-                      className="h-8 w-24 text-right font-mono"
-                    />
+                    {hasData ? (
+                      <Input
+                        type="number"
+                        step="0.01"
+                        value={desiredPrice}
+                        onChange={(e) =>
+                          setOverride(row.sku, { desiredPrice: parseFloat(e.target.value) || 0 })
+                        }
+                        className="h-8 w-24 text-right font-mono"
+                      />
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
                   </Td>
-                  <Td className="text-right font-mono">{fmt$(m.cogs)}</Td>
-                  <Td className="text-right font-mono">{fmt$(m.referralFee)}</Td>
-                  <Td className="text-right font-mono">{fmt$(m.fbaFee)}</Td>
-                  <Td className="text-right font-mono">{fmt$(m.shippingStorage)}</Td>
+                  <Td className="text-right font-mono">{m ? fmt$(m.cogs) : "—"}</Td>
+                  <Td className="text-right font-mono">{m ? fmt$(m.referralFee) : "—"}</Td>
+                  <Td className="text-right font-mono">{m ? fmt$(m.fbaFee) : "—"}</Td>
+                  <Td className="text-right font-mono">{m ? fmt$(m.shippingStorage) : "—"}</Td>
                   <Td>
-                    <Input
-                      type="number"
-                      step="0.1"
-                      value={tacosPercent}
-                      onChange={(e) =>
-                        setOverride(row.sku, { tacosPercent: parseFloat(e.target.value) || 0 })
-                      }
-                      className="h-8 w-20 text-right font-mono"
-                    />
+                    {hasData ? (
+                      <Input
+                        type="number"
+                        step="0.1"
+                        value={tacosPercent}
+                        onChange={(e) =>
+                          setOverride(row.sku, { tacosPercent: parseFloat(e.target.value) || 0 })
+                        }
+                        className="h-8 w-20 text-right font-mono"
+                      />
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
                   </Td>
-                  <Td className="text-right font-mono">{fmt$(m.tacosDollar)}</Td>
-                  <Td className="text-right font-mono">{fmt$(m.totalCosts)}</Td>
+                  <Td className="text-right font-mono">{m ? fmt$(m.tacosDollar) : "—"}</Td>
+                  <Td className="text-right font-mono">{m ? fmt$(m.totalCosts) : "—"}</Td>
                   <Td
                     className={`text-right font-mono font-semibold ${
                       marginBand === "good"
                         ? "text-success"
                         : marginBand === "ok"
                         ? "text-warning"
-                        : "text-destructive"
+                        : marginBand === "bad"
+                        ? "text-destructive"
+                        : "text-muted-foreground"
                     }`}
                   >
-                    {fmt$(m.netProfit)}
+                    {m ? fmt$(m.netProfit) : "—"}
                   </Td>
                   <Td
                     className={`text-right font-mono font-semibold ${
@@ -200,10 +265,12 @@ export default function DashboardTable() {
                         ? "text-success"
                         : marginBand === "ok"
                         ? "text-warning"
-                        : "text-destructive"
+                        : marginBand === "bad"
+                        ? "text-destructive"
+                        : "text-muted-foreground"
                     }`}
                   >
-                    {m.netProfitPercent.toFixed(1)}%
+                    {m ? `${m.netProfitPercent.toFixed(1)}%` : "—"}
                   </Td>
                 </tr>
               );
@@ -213,10 +280,13 @@ export default function DashboardTable() {
       </div>
 
       <p className="mt-3 text-xs text-muted-foreground">
-        Dashboard edits are a <strong>local what-if</strong> — they never touch the saved live snapshots.
-        Use the calculator to persist a change.
-        · Margin colour: <span className="text-success">≥25%</span> ·{" "}
-        <span className="text-warning">15–25%</span> · <span className="text-destructive">&lt;15%</span>
+        Dashboard edits are a <strong>local what-if</strong> — they never touch saved snapshots.
+        Status: <StatusBadge status="live" inline /> uses the latest live snapshot ·{" "}
+        <StatusBadge status="rd" inline /> no live yet, R&amp;D plan shown ·{" "}
+        <StatusBadge status="none" inline /> SKU exists in Product Information but no cost saved.
+        Margin colour: <span className="text-success">≥25%</span> ·{" "}
+        <span className="text-warning">15–25%</span> ·{" "}
+        <span className="text-destructive">&lt;15%</span>
       </p>
     </div>
   );
@@ -224,13 +294,60 @@ export default function DashboardTable() {
 
 function Th({ children, className = "" }: { children: React.ReactNode; className?: string }) {
   return (
-    <th className={`px-3 py-2 text-xs font-semibold uppercase tracking-wide whitespace-nowrap ${className}`}>
+    <th
+      className={`px-3 py-2 text-xs font-semibold uppercase tracking-wide whitespace-nowrap ${className}`}
+    >
       {children}
     </th>
   );
 }
 function Td({ children, className = "" }: { children: React.ReactNode; className?: string }) {
   return <td className={`px-3 py-2 align-middle whitespace-nowrap ${className}`}>{children}</td>;
+}
+
+function FilterButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`px-2.5 py-1 rounded-sm transition-colors ${
+        active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function StatusBadge({ status, inline = false }: { status: VersionStatus; inline?: boolean }) {
+  const cfg: Record<
+    VersionStatus,
+    { label: string; cls: string }
+  > = {
+    live: { label: "LIVE", cls: "bg-success/15 text-success border-success/30" },
+    rd: { label: "R&D", cls: "bg-info/15 text-info border-info/30" },
+    none: {
+      label: "NOT COSTED",
+      cls: "bg-muted text-muted-foreground border-border",
+    },
+  };
+  const c = cfg[status];
+  const size = inline ? "text-[10px] px-1.5 py-0" : "text-[11px] px-1.5 py-0.5";
+  return (
+    <span
+      className={`inline-flex items-center font-semibold uppercase tracking-wide rounded border ${c.cls} ${size}`}
+    >
+      {c.label}
+    </span>
+  );
 }
 
 function fmt$(v: number): string {
