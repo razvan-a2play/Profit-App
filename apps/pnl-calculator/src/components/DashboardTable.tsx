@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Button, Input, useToast } from "@platform/ui";
 import { loadDashboardRows, type DashboardRow, type VersionStatus } from "@/lib/dashboard-data";
 import { computeMetrics } from "@/lib/dashboard-calc";
+import { useFeeSchedule } from "@/lib/fee-schedule";
 
 interface Overrides {
   [sku: string]: { desiredPrice?: number; tacosPercent?: number };
@@ -14,6 +15,7 @@ type StatusFilter = "all" | "live" | "withVersion" | "none";
 
 export default function DashboardTable() {
   const { toast } = useToast();
+  const { schedule } = useFeeSchedule();
   const [rows, setRows] = useState<DashboardRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [overrides, setOverrides] = useState<Overrides>({});
@@ -35,7 +37,7 @@ export default function DashboardTable() {
   }, []);
 
   const counts = useMemo(() => {
-    if (!rows) return { all: 0, live: 0, rd: 0, none: 0 };
+    if (!rows) return { all: 0, live: 0, rd: 0, "h10-only": 0, none: 0 };
     return rows.reduce(
       (acc, r) => {
         acc.all++;
@@ -164,7 +166,9 @@ export default function DashboardTable() {
               <Th>COGS<br/><span className="font-normal normal-case opacity-70">Helium10</span></Th>
               <Th>Δ COGS</Th>
               <Th>Referral</Th>
-              <Th>FBA fee</Th>
+              <Th title={`${schedule.label}: fulfillment fee for the price column + ${(schedule.fuelSurchargeRate * 100).toFixed(1)}% fuel surcharge − SIPP + battery, weighted 9 months non-peak / 3 peak`}>
+                FBA fee
+              </Th>
               <Th>Ship&nbsp;+&nbsp;Storage</Th>
               <Th>MAX TACOS %</Th>
               <Th>TACOS $</Th>
@@ -180,7 +184,7 @@ export default function DashboardTable() {
               const desiredPrice = getDesiredPrice(row);
               const tacosPercent = getTacosPercent(row);
               const m = hasData
-                ? computeMetrics(row.versionData!, desiredPrice, tacosPercent)
+                ? computeMetrics(row.versionData!, desiredPrice, tacosPercent, schedule)
                 : null;
               const marginBand =
                 !m ? "none" : m.netProfitPercent >= 25 ? "good" : m.netProfitPercent >= 15 ? "ok" : "bad";
@@ -310,17 +314,38 @@ export default function DashboardTable() {
   );
 }
 
-function Th({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+function Th({
+  children,
+  className = "",
+  title,
+}: {
+  children: React.ReactNode;
+  className?: string;
+  title?: string;
+}) {
   return (
     <th
+      title={title}
       className={`px-3 py-2 text-xs font-semibold uppercase tracking-wide whitespace-nowrap ${className}`}
     >
       {children}
     </th>
   );
 }
-function Td({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return <td className={`px-3 py-2 align-middle whitespace-nowrap ${className}`}>{children}</td>;
+function Td({
+  children,
+  className = "",
+  title,
+}: {
+  children: React.ReactNode;
+  className?: string;
+  title?: string;
+}) {
+  return (
+    <td title={title} className={`px-3 py-2 align-middle whitespace-nowrap ${className}`}>
+      {children}
+    </td>
+  );
 }
 
 function FilterButton({

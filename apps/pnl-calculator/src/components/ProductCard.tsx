@@ -37,12 +37,8 @@ import { calculateCBMPerUnit, getCBMPerUnit, getCBFPerUnit } from "@platform/cal
 import { calculateShippingCosts, calculateShippingByStrategy } from "@platform/calc";
 import { calculateDimensionalWeight } from "@platform/calc";
 import { calculateTikTokReferralFee, calculateTikTokRefundAdminFee, calculateTikTokFees } from "@platform/calc";
-import {
-  calculateReferralFee,
-  calculateFBATierAndFee,
-  calculateReturnProcessingFee,
-  calculateSippDiscount,
-} from '@platform/calc';
+import { calculateReferralFee, computeAmazonFbaFees } from '@platform/calc';
+import { useFeeSchedule } from '@/lib/fee-schedule';
 import SummaryBar from './SummaryBar';
 
 // Marketing Percentage Input Component to handle controlled input with local state
@@ -247,10 +243,29 @@ const ProductCard = memo<ProductCardProps>(({
   
   const { toast } = useToast();
   
-  // Memoize heavy calculations
-  const fbaData = useMemo(() => (
-    calculateFBATierAndFee(product.length ?? 0, product.width ?? 0, product.height ?? 0, product.weight ?? 0, product.sellingPrice ?? 0, product.hazmat || false)
-  ), [product.length, product.width, product.height, product.weight, product.sellingPrice, product.hazmat]);
+  // Amazon FBA fees: one breakdown (price column, fuel surcharge, SIPP,
+  // battery, peak weighting) shared by the fees card, the P&L total and the
+  // returns cost, priced with the fee schedule picked in the header.
+  const { schedule: feeSchedule } = useFeeSchedule();
+  const amazonFees = useMemo(() => {
+    const input = {
+      length: product.length ?? 0,
+      width: product.width ?? 0,
+      height: product.height ?? 0,
+      weight: product.weight ?? 0,
+      sellingPrice: product.sellingPrice ?? 0,
+      category: product.category ?? '',
+      hazmat: product.hazmat || false,
+      containsBatteries: product.containsBatteries || false,
+      sippEligibleOverride: product.sippEligibleOverride ?? true,
+    };
+    return {
+      fees: computeAmazonFbaFees(input, feeSchedule),
+      // What the same unit would cost without the hazmat surcharge, for the card.
+      regularFees: input.hazmat ? computeAmazonFbaFees({ ...input, hazmat: false }, feeSchedule) : null,
+    };
+  }, [product.length, product.width, product.height, product.weight, product.sellingPrice, product.category, product.hazmat, product.containsBatteries, product.sippEligibleOverride, feeSchedule]);
+  const fees = amazonFees.fees;
 
   const referralData = useMemo(() => (
     calculateReferralFee(product.category, product.sellingPrice ?? 0)
@@ -665,21 +680,10 @@ const ProductCard = memo<ProductCardProps>(({
     // Factory Price Inputs
     const factoryPriceInputs = calculateFactoryPriceInputs(product, additionalCostsTotal);
     
-    // Total Amazon Fees calculation
-    // Use memoized values to avoid recalculations on each render
-    // fbaData and referralData are defined above with useMemo
-    // Use sorted dimensions for SIPP eligibility (same as FBACalculation component)
-    const dims = [(product.length ?? 0) / 2.54, (product.width ?? 0) / 2.54, (product.height ?? 0) / 2.54].sort((a, b) => b - a);
-    const sippEligible = dims[0] > 6 && dims[1] > 4 && dims[2] > 0.375;
-    const finalSippEligible = sippEligible && (product.sippEligibleOverride ?? true);
-    const sippDiscount = finalSippEligible ? calculateSippDiscount(fbaData.tier, fbaData.billableWeight * 16) : 0;
-    const lowPriceDiscount = (product.sellingPrice ?? 0) < 10 ? 0.77 : 0;
-    
-    const totalAmazonFeesNonPeak = Math.max(0, fbaData.feeNonPeak - lowPriceDiscount) + referralData.fee - sippDiscount;
-    const totalAmazonFeesPeak = Math.max(0, fbaData.feePeak - lowPriceDiscount) + referralData.fee - sippDiscount;
-    
-    // Weighted average: (Non-Peak * 9 + Peak * 3) / 12
-    const weightedAmazonFees = (totalAmazonFeesNonPeak * 9 + totalAmazonFeesPeak * 3) / 12;
+    // Total Amazon fees: FBA fee (price column + fuel surcharge - SIPP +
+    // battery) + referral, weighted (non-peak x 9 + peak x 3) / 12.
+    const sippDiscount = fees.sippDiscount;
+    const weightedAmazonFees = fees.totalWeighted;
     
     // Shipping & Storage Total calculation - includes all shipping and storage costs based on fulfillment method
     const { cbmPerUnit, cbfPerUnit, units } = memoizedCBMResult;
@@ -717,11 +721,11 @@ const ProductCard = memo<ProductCardProps>(({
     // Total Refund Cost/Unit calculation (must match the value shown in the Customer Returns card)
     const returnsRate = product.estimatedReturnsPercentage / 100;
     const refundAdminFee = Math.min(5, 0.2 * referralData.fee);
-    const shippingWeightOz = fbaData.billableWeight * 16;
-    const returnProcessingFee = calculateReturnProcessingFee(fbaData.tier, shippingWeightOz);
+    const returnProcessingFee = fees.returnProcessingFee;
 
-    // Use the same weighted FBA fees used for display (no low-price discount or referral fee included here)
-    const returnsWeightedFBAFees = (fbaData.feeNonPeak * 9 + fbaData.feePeak * 3) / 12;
+    // Fulfillment fee lost on the returned unit: peak-weighted, with the fuel
+    // surcharge, before SIPP (subtracted below) and without referral.
+    const returnsWeightedFBAFees = fees.fulfillmentWeightedWithSurcharge;
 
     // Factory inputs used for returns calc (align with UI: include additionalCosts to match main calculation)
     const returnsFactoryInputs = (product.cost ?? 0) + (product.retailBoxCost ?? 0) + (product.cardCost ?? 0) + (product.userManualCost ?? 0) + additionalCostsTotal;
@@ -764,18 +768,7 @@ const ProductCard = memo<ProductCardProps>(({
       // Add detailed Amazon FBA total cost components
       totalCostComponents: {
         factoryPriceInputs: calculateFactoryPriceInputs(product, additionalCostsTotal),
-        weightedAmazonFees: (() => {
-          const dims = [product.length / 2.54, product.width / 2.54, product.height / 2.54].sort((a, b) => b - a);
-          const sippEligible = dims[0] > 6 && dims[1] > 4 && dims[2] > 0.375;
-          const finalSippEligible = sippEligible && (product.sippEligibleOverride ?? true);
-          const sippDiscount = finalSippEligible ? calculateSippDiscount(fbaData.tier, fbaData.billableWeight * 16) : 0;
-          const lowPriceDiscount = product.sellingPrice < 10 ? 0.77 : 0;
-          
-          const totalAmazonFeesNonPeak = Math.max(0, fbaData.feeNonPeak - lowPriceDiscount) + referralData.fee - sippDiscount;
-          const totalAmazonFeesPeak = Math.max(0, fbaData.feePeak - lowPriceDiscount) + referralData.fee - sippDiscount;
-          
-          return (totalAmazonFeesNonPeak * 9 + totalAmazonFeesPeak * 3) / 12;
-        })(),
+        weightedAmazonFees: fees.totalWeighted,
         shippingStorageTotal: (() => {
           // Use memoized storage calculation instead of redundant calculation
           const { cbmPerUnit, cbfPerUnit, units } = memoizedCBMResult;
@@ -808,13 +801,9 @@ const ProductCard = memo<ProductCardProps>(({
           
           const returnsRate = product.estimatedReturnsPercentage / 100;
           const refundAdminFee = Math.min(5, 0.2 * referralData.fee);
-          const shippingWeightOz = fbaData.billableWeight * 16;
-          const returnProcessingFee = calculateReturnProcessingFee(fbaData.tier, shippingWeightOz);
-          const returnsWeightedFBAFees = (fbaData.feeNonPeak * 9 + fbaData.feePeak * 3) / 12;
-          const dims = [(product.length ?? 0) / 2.54, (product.width ?? 0) / 2.54, (product.height ?? 0) / 2.54].sort((a, b) => b - a);
-          const sippEligible = dims[0] > 6 && dims[1] > 4 && dims[2] > 0.375;
-          const finalSippEligible = sippEligible && (product.sippEligibleOverride ?? true);
-          const sippDiscount = finalSippEligible ? calculateSippDiscount(fbaData.tier, fbaData.billableWeight * 16) : 0;
+          const returnProcessingFee = fees.returnProcessingFee;
+          const returnsWeightedFBAFees = fees.fulfillmentWeightedWithSurcharge;
+          const sippDiscount = fees.sippDiscount;
           const returnsFactoryInputs = (product.cost ?? 0) + (product.retailBoxCost ?? 0) + (product.cardCost ?? 0) + (product.userManualCost ?? 0) + additionalCostsTotal;
           
           const shippingToAMZCost = cbmPerUnit * product.cbmCost;
@@ -2975,12 +2964,12 @@ const ProductCard = memo<ProductCardProps>(({
                   <p>Calculates Amazon's Fulfillment by Amazon fees and commissions.</p>
                   <div className="text-sm space-y-1">
                     <p><strong>Fee Components:</strong></p>
-                    <p>• Fulfillment Fee = Size tier + weight-based (Peak vs Non-Peak seasons)</p>
+                    <p>• Fulfillment Fee = size tier + weight band, from Amazon&apos;s rate card for the selling price (under $10 / $10–$50 / over $50)</p>
+                    <p>• Fuel &amp; Logistics Surcharge = {(feeSchedule.fuelSurchargeRate * 100).toFixed(1)}% of the fulfillment fee</p>
+                    <p>• SIPP Discount = taken off after the surcharge, if L{'>'}6&quot;, W{'>'}4&quot;, H{'>'}0.375&quot;</p>
                     <p>• Referral Fee = Category % × Selling Price (varies by category)</p>
-                    <p>• Return Processing = Min(20% × Selling Price, $20) if {'>'}$10</p>
-                    <p>• SIPP Discount = Available if L{'>'}6&quot;, W{'>'}4&quot;, H{'>'}0.375&quot;</p>
-                    <p>• Low Price Discount = $0.77 if Selling Price {'<'}$10</p>
                     <p><strong>Weighted Fees:</strong> (Non-Peak × 9 + Peak × 3) ÷ 12</p>
+                    <p><strong>Rates:</strong> {feeSchedule.label}, chosen in the &quot;Amazon fees&quot; picker at the top of the page</p>
                     <p><strong>Size Determination:</strong> Based on longest, median, shortest dimensions + weight</p>
                   </div>
                 </div>
@@ -2992,13 +2981,14 @@ const ProductCard = memo<ProductCardProps>(({
           width={product.width}
           height={product.height}
           weight={product.weight}
-          sellingPrice={product.sellingPrice}
           category={product.category}
           additionalCosts={additionalCostsTotal}
           sippEligibleOverride={product.sippEligibleOverride ?? true}
           onSippOverrideChange={(value) => updateProduct(product.id, 'sippEligibleOverride', value)}
           hazmat={product.hazmat || false}
-          containsBatteries={product.containsBatteries || false}
+          fees={fees}
+          regularFees={amazonFees.regularFees}
+          scheduleNotes={feeSchedule.notes}
         />
         </div>
 
@@ -3398,11 +3388,8 @@ const ProductCard = memo<ProductCardProps>(({
                       const referralFee = calculateReferralFee(product.category, product.sellingPrice).fee;
                       const refundAdminFee = Math.min(5, 0.2 * referralFee); // MIN(5, 0.2 * Referral Fee)
                       
-                      // Calculate return processing fee based on size tier and weight
-                      const fbaData = calculateFBATierAndFee(product.length ?? 0, product.width ?? 0, product.height ?? 0, product.weight ?? 0, product.sellingPrice ?? 0, product.hazmat || false);
-                      const shippingWeightOz = fbaData.billableWeight * 16; // Convert pounds to ounces
-                      const returnProcessingFee = calculateReturnProcessingFee(fbaData.tier, shippingWeightOz);
-                      const returnFee = returnProcessingFee;
+                      // Return processing fee for the size tier and shipping weight
+                      const returnFee = fees.returnProcessingFee;
                       
                       // Calculate shipping & storage total using memoized values
                       const shippingToAMZCost = cbmPerUnit * product.cbmCost;
@@ -3427,16 +3414,11 @@ const ProductCard = memo<ProductCardProps>(({
                         shippingStorageTotal = shippingToAMZCost + storageFBA;
                       }
                       
-                      // Calculate weighted average of FBA Fulfillment Fees
-                      // (FBA Fulfillment Fees Non-Peak Season * 9 + FBA Fulfillment Fees Peak Season * 3) / 12
-                      const weightedFBAFees = (fbaData.feeNonPeak * 9 + fbaData.feePeak * 3) / 12;
-                      
-                      // Calculate SIPP Discount (if eligible)
-                      // Use sorted dimensions for SIPP eligibility
-                      const dims = [product.length / 2.54, product.width / 2.54, product.height / 2.54].sort((a, b) => b - a);
-                      const sippEligible = dims[0] > 6 && dims[1] > 4 && dims[2] > 0.375;
-                      const finalSippEligible = sippEligible && (product.sippEligibleOverride ?? true);
-                      const sippDiscount = finalSippEligible ? calculateSippDiscount(fbaData.tier, fbaData.billableWeight * 16) : 0;
+                      // Fulfillment fee lost on the returned unit, weighted
+                      // (non-peak x 9 + peak x 3) / 12, with the fuel surcharge.
+                      // Same figures as the P&L total above.
+                      const weightedFBAFees = fees.fulfillmentWeightedWithSurcharge;
+                      const sippDiscount = fees.sippDiscount;
                       
                       // Apply formula: Estimated Returns (%) * (Factory Price Inputs + TOTAL from Shipping & Storage + Refund Administration Fee + Return Fee + Weighted FBA Fees - SIPP Discount)
                       const factoryPriceInputs = calculateFactoryPriceInputs(product, additionalCostsTotal);

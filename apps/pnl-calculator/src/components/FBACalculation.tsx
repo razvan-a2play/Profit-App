@@ -2,87 +2,65 @@
 
 import React from 'react';
 import { DollarSign, CheckCircle, XCircle, AlertTriangle } from 'lucide-react';
-import {
-  calculateFBATierAndFee,
-  calculateReferralFee,
-  calculateReturnProcessingFee,
-  calculateSippDiscount,
-  checkSippEligibility,
-} from "@platform/calc";
+import { checkSippEligibility, PRICE_BAND_LABEL, type AmazonFbaFeeBreakdown } from "@platform/calc";
 
 interface FBACalculationProps {
   length: number;
   width: number;
   height: number;
   weight: number;
-  sellingPrice: number;
   category: string;
   additionalCosts?: number;
   sippEligibleOverride?: boolean;
   onSippOverrideChange?: (value: boolean) => void;
   hazmat?: boolean;
-  containsBatteries?: boolean;
+  /** The breakdown the P&L total uses, so the card can't disagree with it. */
+  fees: AmazonFbaFeeBreakdown;
+  /** Same unit without dangerous-goods rates, for the hazmat comparison. */
+  regularFees?: AmazonFbaFeeBreakdown | null;
+  scheduleNotes?: string[];
 }
+
+const $ = (n: number) => `$${n.toFixed(2)}`;
 
 const FBACalculation: React.FC<FBACalculationProps> = ({
   length,
   width,
   height,
   weight,
-  sellingPrice,
   category,
   additionalCosts = 0,
   sippEligibleOverride = true,
   onSippOverrideChange,
   hazmat = false,
-  containsBatteries = false
+  fees,
+  regularFees = null,
+  scheduleNotes = [],
 }) => {
-  const fbaData = calculateFBATierAndFee(length, width, height, weight, sellingPrice, hazmat);
-  // Calculate regular (non-hazmat) fees for comparison when hazmat is enabled
-  const regularFbaData = hazmat ? calculateFBATierAndFee(length, width, height, weight, sellingPrice, false) : null;
-  const referralData = calculateReferralFee(category, sellingPrice);
   const sippEligible = checkSippEligibility(length, width, height);
-  
-  // Calculate SIPP dimension checks for display
-  const lengthInches = length / 2.54;
-  const widthInches = width / 2.54;
-  const heightInches = height / 2.54;
-  const sortedDims = [lengthInches, widthInches, heightInches].sort((a, b) => b - a);
-  
+
+  // SIPP dimension checks for display
+  const sortedDims = [length / 2.54, width / 2.54, height / 2.54].sort((a, b) => b - a);
   const sippDimChecks = {
     longest: sortedDims[0] > 6,
     median: sortedDims[1] > 4,
-    shortest: sortedDims[2] > 0.375
+    shortest: sortedDims[2] > 0.375,
   };
-  
-  // Apply manual override for SIPP eligibility (e.g., for fragile products)
-  const finalSippEligible = (sippEligible === "YES" && sippEligibleOverride) ? "YES" : "NO";
-  const sippDiscount = finalSippEligible === "YES" ? calculateSippDiscount(fbaData.tier, fbaData.billableWeight * 16) : 0;
-
-  // Apply low price discount only in total calculations
-  // $0.77 until Dec 31, 2025, then $0.86 starting Jan 1, 2026
-  const effectiveDate = new Date('2026-01-01');
-  const currentDate = new Date();
-  const lowPriceDiscountAmount = currentDate >= effectiveDate ? 0.86 : 0.77;
-  const lowPriceDiscount = sellingPrice < 10 ? lowPriceDiscountAmount : 0;
-  const adjustedFBANonPeak = Math.max(0, fbaData.feeNonPeak - lowPriceDiscount);
-  const adjustedFBAPeak = Math.max(0, fbaData.feePeak - lowPriceDiscount);
-  
-  // Battery fee
-  const batteryFee = containsBatteries ? 0.11 : 0;
-  
-  const totalFeesNonPeak = adjustedFBANonPeak + referralData.fee - sippDiscount + batteryFee;
-  const totalFeesPeak = adjustedFBAPeak + referralData.fee - sippDiscount + batteryFee;
-  const netProfitNonPeak = sellingPrice - totalFeesNonPeak;
-  const netProfitPeak = sellingPrice - totalFeesPeak;
+  const finalSippEligible = fees.sippCertified ? "YES" : "NO";
+  const surchargePct = `${(fees.fuelSurchargeRate * 100).toFixed(1)}%`;
 
   return (
     <div className="bg-yellow-50 p-6 rounded-lg">
-      <h3 className="text-lg font-semibold text-yellow-800 mb-4 flex items-center">
-        <DollarSign className="w-5 h-5 mr-2" />
-        FBA Fees Calculation
+      <h3 className="text-lg font-semibold text-yellow-800 mb-4 flex items-center flex-wrap gap-x-3">
+        <span className="flex items-center">
+          <DollarSign className="w-5 h-5 mr-2" />
+          FBA Fees Calculation
+        </span>
+        <span className="text-sm font-normal text-yellow-700">
+          {fees.scheduleLabel} · {PRICE_BAND_LABEL[fees.priceBand]} price column
+        </span>
       </h3>
-      
+
       {!length || !width || !height || !weight ? (
         <div className="text-center text-gray-500 py-8">
           Enter product dimensions and weight to calculate FBA fees
@@ -94,15 +72,15 @@ const FBACalculation: React.FC<FBACalculationProps> = ({
             <h4 className="font-semibold text-gray-800 mb-3">Size Tier Classification</h4>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div className="text-center">
-                <div className="text-xl font-bold text-yellow-600">{fbaData.tier}</div>
+                <div className="text-xl font-bold text-yellow-600">{fees.tier}</div>
                 <div className="text-sm text-gray-600">Size Tier</div>
               </div>
               <div className="text-center">
-                <div className="text-xl font-bold text-yellow-600">{fbaData.billableWeight.toFixed(2)} lb</div>
+                <div className="text-xl font-bold text-yellow-600">{fees.billableWeight.toFixed(2)} lb</div>
                 <div className="text-sm text-gray-600">Billable Weight</div>
               </div>
               <div className="text-center">
-                <div className="text-xl font-bold text-yellow-600">{fbaData.dimWeight.toFixed(3)} lb</div>
+                <div className="text-xl font-bold text-yellow-600">{fees.dimWeight.toFixed(3)} lb</div>
                 <div className="text-sm text-gray-600">Dimensional Weight (Divisor 139)</div>
               </div>
               <div className="text-center">
@@ -147,9 +125,11 @@ const FBACalculation: React.FC<FBACalculationProps> = ({
                 </div>
               )}
               {finalSippEligible === "YES" && (
-                <div className="mt-3 text-center">
-                  <div className="text-lg font-bold text-green-600">${sippDiscount.toFixed(2)}</div>
-                  <div className="text-sm text-gray-600">SIPP Discount Available</div>
+                <div className="mt-3 ml-6 text-center">
+                  <div className="text-lg font-bold text-green-600">{$(fees.sippDiscount)}</div>
+                  <div className="text-sm text-gray-600">
+                    {fees.sippDiscount > 0 ? "SIPP Discount" : "No SIPP discount for this tier"}
+                  </div>
                 </div>
               )}
             </div>
@@ -184,34 +164,34 @@ const FBACalculation: React.FC<FBACalculationProps> = ({
                 <div className="flex justify-between items-center">
                   <span className="text-gray-600">Non-Peak Season:</span>
                   <div className="text-right">
-                    <span className="font-semibold">${fbaData.feeNonPeak.toFixed(2)}</span>
-                    {hazmat && regularFbaData && (
+                    <span className="font-semibold">{$(fees.fulfillmentNonPeak)}</span>
+                    {hazmat && regularFees && (
                       <span className="ml-2 text-xs text-gray-400 line-through">
-                        ${regularFbaData.feeNonPeak.toFixed(2)}
+                        {$(regularFees.fulfillmentNonPeak)}
                       </span>
                     )}
                   </div>
                 </div>
                 <div className="flex justify-between items-center">
-                  <span className="text-gray-600">Peak Season:</span>
+                  <span className="text-gray-600">Peak Season (Oct 15 – Jan 14):</span>
                   <div className="text-right">
-                    <span className="font-semibold">${fbaData.feePeak.toFixed(2)}</span>
-                    {hazmat && regularFbaData && (
+                    <span className="font-semibold">{$(fees.fulfillmentPeak)}</span>
+                    {hazmat && regularFees && (
                       <span className="ml-2 text-xs text-gray-400 line-through">
-                        ${regularFbaData.feePeak.toFixed(2)}
+                        {$(regularFees.fulfillmentPeak)}
                       </span>
                     )}
                   </div>
                 </div>
-                {hazmat && regularFbaData && (
+                {hazmat && regularFees && (
                   <div className="mt-2 pt-2 border-t border-orange-100 text-xs text-orange-600">
                     <div className="flex justify-between">
                       <span>Hazmat surcharge (Non-Peak):</span>
-                      <span>+${(fbaData.feeNonPeak - regularFbaData.feeNonPeak).toFixed(2)}</span>
+                      <span>+{$(fees.fulfillmentNonPeak - regularFees.fulfillmentNonPeak)}</span>
                     </div>
                     <div className="flex justify-between">
                       <span>Hazmat surcharge (Peak):</span>
-                      <span>+${(fbaData.feePeak - regularFbaData.feePeak).toFixed(2)}</span>
+                      <span>+{$(fees.fulfillmentPeak - regularFees.fulfillmentPeak)}</span>
                     </div>
                   </div>
                 )}
@@ -227,16 +207,16 @@ const FBACalculation: React.FC<FBACalculationProps> = ({
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-600">Rate:</span>
-                  <span className="font-semibold">{referralData.rate}%</span>
+                  <span className="font-semibold">{fees.referralRate}%</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-600">Fee:</span>
-                  <span className="font-semibold">${referralData.fee.toFixed(2)}</span>
+                  <span className="font-semibold">{$(fees.referralFee)}</span>
                 </div>
-                {referralData.error && (
+                {fees.referralError && (
                   <div className="flex justify-between">
                     <span className="text-red-600">Error:</span>
-                    <span className="font-semibold text-red-600">{referralData.error}</span>
+                    <span className="font-semibold text-red-600">{fees.referralError}</span>
                   </div>
                 )}
               </div>
@@ -247,48 +227,62 @@ const FBACalculation: React.FC<FBACalculationProps> = ({
           <div className="bg-white p-4 rounded-lg border">
             <h4 className="font-semibold text-gray-800 mb-3">Total Amazon Fees Summary</h4>
             <div className="mb-4 text-sm text-gray-600 space-y-1">
+              <div className="flex justify-end text-xs text-gray-400 gap-6 pr-0.5">
+                <span>Non-Peak / Peak</span>
+              </div>
               <div className="flex justify-between">
-                <span>FBA Fulfillment Fees Non-Peak Season / Peak Season:</span>
-                <span>${adjustedFBANonPeak.toFixed(2)} / ${adjustedFBAPeak.toFixed(2)}</span>
+                <span>FBA Fulfillment Fee:</span>
+                <span>{$(fees.fulfillmentNonPeak)} / {$(fees.fulfillmentPeak)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>+ Fuel &amp; Logistics Surcharge ({surchargePct}):</span>
+                <span>{$(fees.surchargeNonPeak)} / {$(fees.surchargePeak)}</span>
+              </div>
+              {fees.sippDiscount > 0 && (
+                <div className="flex justify-between text-green-600">
+                  <span>- SIPP Discount:</span>
+                  <span>-{$(fees.sippDiscount)}</span>
+                </div>
+              )}
+              {fees.batteryFee > 0 && (
+                <div className="flex justify-between">
+                  <span>+ Battery Fee:</span>
+                  <span>{$(fees.batteryFee)}</span>
+                </div>
+              )}
+              <div className="flex justify-between font-medium text-gray-700">
+                <span>= FBA Fee:</span>
+                <span>{$(fees.fbaNonPeak)} / {$(fees.fbaPeak)}</span>
               </div>
               <div className="flex justify-between">
                 <span>+ Referral Fee:</span>
-                <span>${referralData.fee.toFixed(2)}</span>
+                <span>{$(fees.referralFee)}</span>
               </div>
-              {sippDiscount > 0 && (
-                <div className="flex justify-between text-green-600">
-                  <span>- SIPP Discount:</span>
-                  <span>-${sippDiscount.toFixed(2)}</span>
-                </div>
-              )}
-              {batteryFee > 0 && (
-                <div className="flex justify-between">
-                  <span>+ Battery Fee:</span>
-                  <span>${batteryFee.toFixed(2)}</span>
-                </div>
-              )}
-              {lowPriceDiscount > 0 && (
-                <div className="flex justify-between text-green-600">
-                  <span>- Low Price Discount:</span>
-                  <span>-${lowPriceDiscount.toFixed(2)}</span>
-                </div>
-              )}
               {additionalCosts > 0 && (
                 <div className="flex justify-between text-gray-600">
                   <span>+ Additional Costs (included in calculations):</span>
-                  <span>${additionalCosts.toFixed(2)}</span>
+                  <span>{$(additionalCosts)}</span>
                 </div>
               )}
               <hr className="my-2" />
             </div>
             <div className="text-center">
-              <div>
-                <div className="text-xl font-bold text-red-600">${totalFeesNonPeak.toFixed(2)}</div>
-                <div className="text-sm text-gray-600">Total Amazon Fees (Non-Peak)</div>
-                <div className="text-lg font-bold text-red-500 mt-1">${totalFeesPeak.toFixed(2)}</div>
-                <div className="text-xs text-gray-500">(Peak Season)</div>
+              <div className="text-xl font-bold text-red-600">{$(fees.totalNonPeak)}</div>
+              <div className="text-sm text-gray-600">Total Amazon Fees (Non-Peak)</div>
+              <div className="text-lg font-bold text-red-500 mt-1">{$(fees.totalPeak)}</div>
+              <div className="text-xs text-gray-500">(Peak Season)</div>
+              <div className="mt-3 text-sm text-gray-700">
+                Used in the P&amp;L: <span className="font-semibold">{$(fees.totalWeighted)}</span>
+                <span className="text-xs text-gray-500"> (9 months non-peak + 3 months peak)</span>
               </div>
             </div>
+            {scheduleNotes.length > 0 && (
+              <ul className="mt-4 text-xs text-gray-500 list-disc pl-5 space-y-0.5">
+                {scheduleNotes.map((n) => (
+                  <li key={n}>{n}</li>
+                ))}
+              </ul>
+            )}
           </div>
         </div>
       )}

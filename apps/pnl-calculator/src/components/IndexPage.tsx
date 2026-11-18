@@ -13,6 +13,7 @@ import FloatingCalculationDatabase from './FloatingCalculationDatabase';
 import { UserMenu } from './UserMenu';
 import Link from 'next/link';
 import { LayoutGrid } from 'lucide-react';
+import { FeeScheduleSelect } from '@/lib/fee-schedule';
 
 import type { Product, AdditionalCost, SavedVersion } from '@/types/product';
 import { useToast } from "@platform/ui";
@@ -442,7 +443,8 @@ const Index: React.FC = () => {
     <div className="min-h-screen bg-gradient-to-br from-primary-light via-background to-accent-light p-4 md:p-6">
       <div className="max-w-7xl mx-auto">
         {/* Top bar with dashboard link + user menu */}
-        <div className="flex justify-end items-center gap-3 mb-2">
+        <div className="flex flex-wrap justify-end items-center gap-3 mb-2">
+          <FeeScheduleSelect />
           <Link href="/dashboard">
             <Button variant="outline" size="sm">
               <LayoutGrid className="w-4 h-4 mr-1.5" />

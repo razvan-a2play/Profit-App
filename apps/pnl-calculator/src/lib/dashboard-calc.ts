@@ -3,16 +3,19 @@
  * math as ProductCard but standalone (no React, no hooks) so we can render a
  * row per SKU cheaply.
  *
+ * Amazon fees come from computeAmazonFbaFees, the same function the product
+ * page uses: price column, fuel surcharge, SIPP, battery fee and the 9/3
+ * non-peak/peak weighting all match.
+ *
  * Simplifying assumptions for V1:
  *   - Fulfillment method = 100% FBA (shipping to AMZ + storage FBA only).
- *   - Non-peak FBA fee (no peak/hazmat blending).
- *   - No SIPP / low-price discount / battery fee — added only if a user asks.
+ *   - No returns cost (the product page adds one).
  *   - Marketing = MAX TACOS × sellingPrice (no separate affiliate/ads columns).
  */
 import {
-  calculateFBATierAndFee,
-  calculateReferralFee,
   calculateShippingCosts,
+  computeAmazonFbaFees,
+  type FeeSchedule,
 } from "@platform/calc";
 import type { Product } from "@/types/product";
 
@@ -56,22 +59,28 @@ export function computeMetrics(
   product: Product,
   desiredPrice: number,
   tacosPercent: number,
+  schedule: FeeSchedule,
 ): DashboardMetrics {
   const price = Number.isFinite(desiredPrice) ? desiredPrice : 0;
 
   const cogs = computeCogs(product);
 
-  const fba = calculateFBATierAndFee(
-    product.length ?? 0,
-    product.width ?? 0,
-    product.height ?? 0,
-    product.weight ?? 0,
-    price,
-    !!product.hazmat,
+  const fees = computeAmazonFbaFees(
+    {
+      length: product.length ?? 0,
+      width: product.width ?? 0,
+      height: product.height ?? 0,
+      weight: product.weight ?? 0,
+      sellingPrice: price,
+      category: product.category ?? "",
+      hazmat: !!product.hazmat,
+      containsBatteries: !!product.containsBatteries,
+      sippEligibleOverride: product.sippEligibleOverride ?? true,
+    },
+    schedule,
   );
-
-  const referral = calculateReferralFee(product.category ?? "", price);
-  const referralFee = referral.fee ?? 0;
+  const referralFee = fees.referralFee;
+  const fbaFee = fees.fbaWeighted;
 
   const shipping = calculateShippingCosts({
     length: product.length ?? 0,
@@ -97,20 +106,20 @@ export function computeMetrics(
 
   const tacosDollar = price * (tacosPercent / 100);
 
-  const totalCosts = cogs + referralFee + fba.feeNonPeak + shippingStorage + tacosDollar;
+  const totalCosts = cogs + referralFee + fbaFee + shippingStorage + tacosDollar;
   const netProfit = price - totalCosts;
   const netProfitPercent = price > 0 ? (netProfit / price) * 100 : 0;
 
   return {
     cogs: round2(cogs),
     referralFee: round2(referralFee),
-    fbaFee: round2(fba.feeNonPeak),
+    fbaFee: round2(fbaFee),
     shippingStorage: round2(shippingStorage),
     tacosDollar: round2(tacosDollar),
     totalCosts: round2(totalCosts),
     netProfit: round2(netProfit),
     netProfitPercent: round1(netProfitPercent),
-    sizeTier: fba.tier,
+    sizeTier: fees.tier,
     cbmPerUnit: shipping.cbmPerUnit,
   };
 }

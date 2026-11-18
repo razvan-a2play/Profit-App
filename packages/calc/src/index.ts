@@ -2,6 +2,8 @@ export * from "./cartonOptimization";
 export * from "./cbmCalculations";
 export * from "./dimensionalWeight";
 export * from "./fbaFees";
+export * from "./feeSchedules";
+export * from "./amazonFees";
 export * from "./feeAudit";
 export * from "./referralFeeCalculations";
 export * from "./shippingCalculations";

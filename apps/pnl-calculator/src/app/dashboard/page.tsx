@@ -2,6 +2,7 @@ import RequireAuth from "@/components/auth/RequireAuth";
 import DashboardTable from "@/components/DashboardTable";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import { UserMenu } from "@/components/UserMenu";
+import { FeeScheduleSelect } from "@/lib/fee-schedule";
 
 export const dynamic = "force-dynamic";
 
@@ -11,7 +12,8 @@ export default function DashboardPage() {
       <RequireAuth>
         <main className="min-h-screen bg-gradient-to-br from-primary-light via-background to-accent-light p-4 md:p-6">
           <div className="max-w-[1600px] mx-auto">
-            <div className="flex justify-end mb-2">
+            <div className="flex flex-wrap justify-end items-center gap-3 mb-2">
+              <FeeScheduleSelect />
               <UserMenu />
             </div>
             <header className="mb-6">

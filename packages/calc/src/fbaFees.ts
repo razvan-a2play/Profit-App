@@ -20,6 +20,12 @@ export interface FbaFeeRow {
   lowPrice?: number | null;
   highPrice?: number | null;
   /**
+   * The holiday-peak table has the same three price columns. `peak` is the
+   * $10-$50 column; these carry the other two when a schedule supplies them.
+   */
+  peakLowPrice?: number | null;
+  peakHighPrice?: number | null;
+  /**
    * Bulky, extra-large and the top large-standard band are not flat rates.
    * Amazon publishes them as a base plus a surcharge per weight interval above
    * a threshold — and the interval is NOT always a pound:
@@ -51,6 +57,11 @@ export interface ReferralCondition {
   minFee: number;
 }
 
+// NOTE: the `nonPeak` figures in FBA_FEES / HAZMAT_FBA_FEES are Amazon's 2026
+// UNDER-$10 (Low-Price FBA) column, not the $10-$50 rate, and `peak` is an
+// older table. Kept as-is because the Fee Auditor diffs pasted rate cards
+// against them. The P&L calculator does not use these: it uses the dated
+// schedules in feeSchedules.ts, which carry every price column.
 export const FBA_FEES: ReadonlyArray<FbaFeeRow> = [
   { tier: "small standard", weightRange: "2 oz or less", nonPeak: 2.43, peak: 3.25, weightBasis: "Unit weight" },
   { tier: "small standard", weightRange: "2+ to 4 oz", nonPeak: 2.49, peak: 3.34, weightBasis: "Unit weight" },
@@ -209,6 +220,12 @@ export interface FeeTableOverride {
   sipp?: ReadonlyArray<FbaFeeRow>;
   /** Per-unit packaging fee Amazon adds to units that are NOT SIPP-certified. */
   nonSippPackaging?: ReadonlyArray<FbaFeeRow>;
+  /**
+   * Size-tier definitions for this rate card. Amazon redraws the bulky and
+   * extra-large tiers between years, so a dated schedule brings its own.
+   * Omitted, the built-in SIZE_TIERS are used.
+   */
+  sizeTiers?: ReadonlyArray<SizeTier>;
 }
 
 /**
@@ -261,6 +278,15 @@ export function bandValue(row: FbaFeeRow, sellingPrice: number): number {
   return row.nonPeak;
 }
 
+/** Same as bandValue, for the holiday-peak columns. */
+export function bandPeakValue(row: FbaFeeRow, sellingPrice: number): number {
+  if (sellingPrice > 0) {
+    if (sellingPrice < 10 && row.peakLowPrice != null) return row.peakLowPrice;
+    if (sellingPrice > 50 && row.peakHighPrice != null) return row.peakHighPrice;
+  }
+  return row.peak;
+}
+
 export function calculateFBATierAndFee(
   length: number,
   width: number,
@@ -297,7 +323,7 @@ export function calculateFBATierAndFee(
   let sizeTier = "Unknown";
   let weightBasis = "Greater of unit or dimensional weight";
 
-  for (const tier of SIZE_TIERS) {
+  for (const tier of feeTableOverride?.sizeTiers ?? SIZE_TIERS) {
     const meetsWeight = !tier.maxWeight || weightLb <= tier.maxWeight;
     const meetsLongest = !tier.maxLongest || longest <= tier.maxLongest;
     const meetsMedian = !tier.maxMedian || median <= tier.maxMedian;
@@ -338,7 +364,7 @@ export function calculateFBATierAndFee(
         // $6.42 item against the $10-$50 column (or an $11 item against the
         // Low-Price column) manufactures a variance that isn't real.
         feeNonPeak = bandValue(feeRow, sellingPrice);
-        feePeak = feeRow.peak;
+        feePeak = bandPeakValue(feeRow, sellingPrice);
 
         // Bulky / extra-large: add the published per-pound surcharge. Amazon
         // charges per whole-pound INTERVAL above the threshold, so a part
@@ -540,7 +566,15 @@ export function calculateReturnProcessingFee(sizeTier: string, shippingWeightOz:
   let normalizedTier = sizeTier.toLowerCase().replace(/[^a-z0-9+]/g, " ").replace(/\s+/g, " ").trim();
   if (normalizedTier.includes("small standard")) normalizedTier = "small standard";
   if (normalizedTier.includes("large standard")) normalizedTier = "large standard";
-  if (normalizedTier.includes("large bulky")) normalizedTier = "large bulky";
+  // Amazon's returns table has one "bulky" row; every bulky tier uses it.
+  if (normalizedTier.includes("bulky")) normalizedTier = "large bulky";
+  // The fee engine names the tier plain "Extra-large"; the returns table
+  // splits it by shipping weight. Without this an extra-large return cost $0.
+  if (normalizedTier === "extra large") {
+    const lb = shippingWeightOz / 16;
+    normalizedTier =
+      lb <= 50 ? "extra large 0 to 50" : lb <= 70 ? "extra large 50" : lb <= 150 ? "extra large 70" : "extra large 150";
+  }
   if (normalizedTier.includes("extra large 0 to 50")) normalizedTier = "extra-large 0 to 50 lb";
   if (normalizedTier.includes("extra large 50") || normalizedTier.includes("50+ to 70")) {
     normalizedTier = "extra-large 50+ to 70 lb";
