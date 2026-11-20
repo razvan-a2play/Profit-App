@@ -26,6 +26,7 @@ import ProductFactoryPrice from './product/ProductFactoryPrice';
 import ProductDimensions from './product/ProductDimensions';
 import ProductMasterCarton from './product/ProductMasterCarton';
 import FBACalculation from './FBACalculation';
+import PackagingCheck from './PackagingCheck';
 import MCFCalculation from './MCFCalculation';
 import ThreePLCalculation from './ThreePLCalculation';
 import TikTokFBTCalculation from './TikTokFBTCalculation';
@@ -1242,6 +1243,14 @@ const ProductCard = memo<ProductCardProps>(({
                   </div>
                 </div>
               </div>
+              {/* Live FBA packaging check: flags a box just past a fee line as you type */}
+              {showAmazonFBA &&
+                (product.length ?? 0) > 0 &&
+                (product.width ?? 0) > 0 &&
+                (product.height ?? 0) > 0 &&
+                (product.weight ?? 0) > 0 && (
+                  <PackagingCheck savings={packagingSavings} scheduleLabel={feeSchedule.label} />
+                )}
             </CardContent>
           </Card>
         </div>
