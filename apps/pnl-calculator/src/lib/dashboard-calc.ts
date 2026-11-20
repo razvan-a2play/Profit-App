@@ -28,6 +28,8 @@ export interface DashboardMetrics {
   totalCosts: number;
   netProfit: number;
   netProfitPercent: number;
+  /** Set when fbaFee (and so the totals) includes estimated peak fees. */
+  peakEstimate: string | null;
   // Diagnostic bits
   sizeTier: string;
   cbmPerUnit: number;
@@ -119,6 +121,7 @@ export function computeMetrics(
     totalCosts: round2(totalCosts),
     netProfit: round2(netProfit),
     netProfitPercent: round1(netProfitPercent),
+    peakEstimate: fees.peakEstimate,
     sizeTier: fees.tier,
     cbmPerUnit: shipping.cbmPerUnit,
   };

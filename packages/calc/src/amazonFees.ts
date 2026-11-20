@@ -73,6 +73,12 @@ export interface AmazonFbaFeeBreakdown {
    * charged the $10-$50 rate.
    */
   lowPriceExcluded: boolean;
+  /**
+   * The peak rate is an estimate (schedule.peakEstimate), so every peak and
+   * weighted figure below includes an estimated part. Holds the explanation
+   * to show the user; null when the peak rate is Amazon's published one.
+   */
+  peakEstimate: string | null;
   batteryFee: number;
 
   /** fulfillment + surcharge - SIPP + packaging + handling + battery. */
@@ -187,6 +193,7 @@ export function computeAmazonFbaFees(
     packagingFee,
     handlingFee,
     lowPriceExcluded,
+    peakEstimate: schedule.peakEstimate && fba.feePeak > 0 ? schedule.peakEstimate : null,
     batteryFee,
 
     fbaNonPeak,

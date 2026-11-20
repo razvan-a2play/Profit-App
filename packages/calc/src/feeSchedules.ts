@@ -48,6 +48,12 @@ export interface FeeSchedule {
   };
   /** Where the figures came from, and anything estimated. Shown in the UI. */
   notes: string[];
+  /**
+   * Set while Amazon hasn't published this year's holiday-peak table and the
+   * peak rates are estimated. Every screen that shows a number built from the
+   * peak rate marks it with this text.
+   */
+  peakEstimate?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -523,10 +529,13 @@ export const US_2027: FeeSchedule = {
   },
   notes: [
     "Amazon's 2027 US rate card (effective Jan 15, 2027), from Seller Central. New bulky and oversize tiers.",
-    "Holiday peak 2027 rates aren't published yet: peak is estimated as 2027 non-peak + 2026's peak markup.",
     "Under $10, Automotive, Computers, Musical Instruments and Media pay the $10–$50 rate.",
     "Oversize items can add Amazon's flat-product and overhang handling fees.",
   ],
+  // Remove when Amazon's 2027 holiday peak table is entered.
+  peakEstimate:
+    "Amazon hasn't published 2027 holiday peak rates (Oct 15, 2027 – Jan 14, 2028). " +
+    "Peak is estimated as the 2027 rate plus Amazon's 2026 peak markup for the same size and price.",
 };
 
 export const FEE_SCHEDULES: ReadonlyArray<FeeSchedule> = [US_2026, US_2027];

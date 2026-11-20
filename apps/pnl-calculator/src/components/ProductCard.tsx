@@ -3445,6 +3445,11 @@ const ProductCard = memo<ProductCardProps>(({
                             <span className="text-card-foreground">Total Refund Cost/Unit:</span>
                             <span className="text-rose-700">${totalRefundCost.toFixed(2)}</span>
                           </div>
+                          {fees.peakEstimate && (
+                            <p className="text-xs text-amber-700 cursor-help" title={fees.peakEstimate}>
+                              Includes the FBA fee lost on returned units, with estimated holiday peak fees.
+                            </p>
+                          )}
                         </>
                       );
                     })()}
@@ -3464,6 +3469,7 @@ const ProductCard = memo<ProductCardProps>(({
           marginPercent={profitMargin}
           tacosPercent={marketingPercentLocal}
           onSellingPriceChange={(val) => updateProduct(product.id, 'sellingPrice', val)}
+          costEstimateNote={showAmazonFBA ? fees.peakEstimate : null}
           showTikTokDual={showTikTokShop && !showAmazonFBA}
           mcfData={showTikTokShop ? {
             totalCost: (() => {

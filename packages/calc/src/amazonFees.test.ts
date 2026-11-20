@@ -249,6 +249,14 @@ describe("2027 peak estimate", () => {
     // 3.75 + (3.51 - 3.32)
     expect(f.fulfillmentPeak).toBeCloseTo(3.94, 2);
   });
+
+  it("flags 2027 figures as estimated so every screen can say so", () => {
+    expect(computeAmazonFbaFees({ ...tiny, sellingPrice: 25 }, US_2027).peakEstimate).toMatch(/hasn't published/);
+    // 2026 peak is Amazon's published table: nothing to flag.
+    expect(computeAmazonFbaFees({ ...tiny, sellingPrice: 25 }, US_2026).peakEstimate).toBeNull();
+    // No fee, nothing estimated.
+    expect(computeAmazonFbaFees({ ...tiny, length: 0, sellingPrice: 25 }, US_2027).peakEstimate).toBeNull();
+  });
 });
 
 describe("returns processing fee for the 2027 tiers", () => {

@@ -11,6 +11,11 @@ interface SummaryBarProps {
   marginPercent: number;
   tacosPercent?: number;
   onSellingPriceChange?: (value: number) => void;
+  /**
+   * Set when Cost includes an estimated figure (e.g. 2027 holiday peak FBA
+   * fees Amazon hasn't published). Shown as "est." with this as the tooltip.
+   */
+  costEstimateNote?: string | null;
   // TikTok Shop specific props
   showTikTokDual?: boolean;
   mcfData?: {
@@ -34,6 +39,7 @@ const SummaryBar: React.FC<SummaryBarProps> = ({
   marginPercent,
   tacosPercent,
   onSellingPriceChange,
+  costEstimateNote = null,
   showTikTokDual = false,
   mcfData,
   fbtData,
@@ -196,6 +202,14 @@ const SummaryBar: React.FC<SummaryBarProps> = ({
         <div className="flex items-center gap-2">
           <span className="text-xs md:text-sm text-muted-foreground">Cost</span>
           <span className="font-semibold">${fmt(totalCost).toFixed(2)}</span>
+          {costEstimateNote && (
+            <span
+              className="text-xs text-amber-700 cursor-help"
+              title={`Cost, profit and margin include estimated Amazon fees. ${costEstimateNote}`}
+            >
+              est.
+            </span>
+          )}
         </div>
         <div className="h-5 w-px bg-border/70" />
         <div className="flex items-center gap-2">

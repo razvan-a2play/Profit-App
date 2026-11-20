@@ -85,13 +85,18 @@ export function FeeScheduleSelect() {
         {FEE_SCHEDULES.map((s) => (
           <option key={s.id} value={s.id} disabled={s.status === "pending"}>
             {s.label} (from {fmtDate(s.effectiveFrom)})
-            {s.status === "pending" ? " — not entered yet" : ""}
+            {s.status === "pending" ? " — not entered yet" : s.peakEstimate ? " — peak estimated" : ""}
           </option>
         ))}
       </select>
       {fellBackFrom && (
         <span className="text-xs text-amber-700 whitespace-nowrap">
           {fellBackFrom.label} not entered yet, showing {schedule.label}
+        </span>
+      )}
+      {schedule.peakEstimate && (
+        <span className="text-xs text-amber-700 cursor-help" title={schedule.peakEstimate}>
+          Holiday peak fees estimated
         </span>
       )}
     </div>

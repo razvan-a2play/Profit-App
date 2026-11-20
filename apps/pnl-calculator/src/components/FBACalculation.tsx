@@ -177,6 +177,11 @@ const FBACalculation: React.FC<FBACalculationProps> = ({
                   <span className="text-gray-600">Peak Season (Oct 15 – Jan 14):</span>
                   <div className="text-right">
                     <span className="font-semibold">{$(fees.fulfillmentPeak)}</span>
+                    {fees.peakEstimate && (
+                      <span className="ml-1 text-xs text-amber-700 cursor-help" title={fees.peakEstimate}>
+                        estimated
+                      </span>
+                    )}
                     {hazmat && regularFees && (
                       <span className="ml-2 text-xs text-gray-400 line-through">
                         {$(regularFees.fulfillmentPeak)}
@@ -229,7 +234,7 @@ const FBACalculation: React.FC<FBACalculationProps> = ({
             <h4 className="font-semibold text-gray-800 mb-3">Total Amazon Fees Summary</h4>
             <div className="mb-4 text-sm text-gray-600 space-y-1">
               <div className="flex justify-end text-xs text-gray-400 gap-6 pr-0.5">
-                <span>Non-Peak / Peak</span>
+                <span>Non-Peak / Peak{fees.peakEstimate ? " (estimated)" : ""}</span>
               </div>
               <div className="flex justify-between">
                 <span>FBA Fulfillment Fee:</span>
@@ -283,11 +288,18 @@ const FBACalculation: React.FC<FBACalculationProps> = ({
               <div className="text-xl font-bold text-red-600">{$(fees.totalNonPeak)}</div>
               <div className="text-sm text-gray-600">Total Amazon Fees (Non-Peak)</div>
               <div className="text-lg font-bold text-red-500 mt-1">{$(fees.totalPeak)}</div>
-              <div className="text-xs text-gray-500">(Peak Season)</div>
+              <div className="text-xs text-gray-500">
+                (Peak Season{fees.peakEstimate ? ", estimated" : ""})
+              </div>
               <div className="mt-3 text-sm text-gray-700">
                 Used in the P&amp;L: <span className="font-semibold">{$(fees.totalWeighted)}</span>
                 <span className="text-xs text-gray-500"> (9 months non-peak + 3 months peak)</span>
               </div>
+              {fees.peakEstimate && (
+                <p className="mt-2 text-xs text-amber-700 max-w-md mx-auto">
+                  Peak part is estimated. {fees.peakEstimate}
+                </p>
+              )}
             </div>
             {scheduleNotes.length > 0 && (
               <ul className="mt-4 text-xs text-gray-500 list-disc pl-5 space-y-0.5">

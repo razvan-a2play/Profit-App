@@ -150,6 +150,13 @@ export default function DashboardTable() {
         </div>
       </div>
 
+      {schedule.peakEstimate && (
+        <p className="mb-2 text-xs text-amber-700">
+          {schedule.label}: FBA fees marked <span className="font-semibold">est.</span> include estimated
+          holiday peak fees, and so do Total Costs, Net Profit and Margin. {schedule.peakEstimate}
+        </p>
+      )}
+
       {/* Table */}
       <div className="border rounded-lg overflow-x-auto bg-card shadow-card">
         <table className="w-full text-sm">
@@ -166,7 +173,7 @@ export default function DashboardTable() {
               <Th>COGS<br/><span className="font-normal normal-case opacity-70">Helium10</span></Th>
               <Th>Δ COGS</Th>
               <Th>Referral</Th>
-              <Th title={`${schedule.label}: fulfillment fee for the price column + ${(schedule.fuelSurchargeRate * 100).toFixed(1)}% fuel surcharge − SIPP + battery, weighted 9 months non-peak / 3 peak`}>
+              <Th title={`${schedule.label}: fulfillment fee for the price column + ${(schedule.fuelSurchargeRate * 100).toFixed(1)}% fuel surcharge − SIPP + battery, weighted 9 months non-peak / 3 peak${schedule.peakEstimate ? " (peak estimated)" : ""}`}>
                 FBA fee
               </Th>
               <Th>Ship&nbsp;+&nbsp;Storage</Th>
@@ -248,7 +255,10 @@ export default function DashboardTable() {
                     {deltaLabel(m?.cogs, row.helium10?.totalCogs ?? null)}
                   </Td>
                   <Td className="text-right font-mono">{m ? fmt$(m.referralFee) : "—"}</Td>
-                  <Td className="text-right font-mono">{m ? fmt$(m.fbaFee) : "—"}</Td>
+                  <Td className="text-right font-mono" title={m?.peakEstimate ?? undefined}>
+                    {m ? fmt$(m.fbaFee) : "—"}
+                    {m?.peakEstimate && <span className="ml-1 font-sans text-xs text-amber-700">est.</span>}
+                  </Td>
                   <Td className="text-right font-mono">{m ? fmt$(m.shippingStorage) : "—"}</Td>
                   <Td>
                     {hasData ? (
