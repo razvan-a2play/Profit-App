@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { findPackagingSavings, type PackagingSaving } from "@platform/calc";
+import { describeSaving } from "@/lib/packaging-text";
 import Link from "next/link";
 import { Button, Input, useToast } from "@platform/ui";
 import { loadDashboardRows, type DashboardRow, type VersionStatus } from "@/lib/dashboard-data";
-import { computeMetrics } from "@/lib/dashboard-calc";
+import { computeMetrics, fbaInputFor } from "@/lib/dashboard-calc";
 import { useFeeSchedule } from "@/lib/fee-schedule";
 
 interface Overrides {
@@ -66,6 +68,20 @@ export default function DashboardTable() {
     overrides[r.sku]?.desiredPrice ?? Number(r.versionData?.sellingPrice ?? 0);
   const getTacosPercent = (r: DashboardRow): number =>
     overrides[r.sku]?.tacosPercent ?? Number(r.versionData?.marketingTacosPercentage ?? 0);
+
+  // Packaging check per row: box trims (≤2 cm, one or two sides) that lower
+  // the FBA fee. Cached on everything that moves the fee, so typing a price
+  // only re-checks that row.
+  const packagingCache = useRef(new Map<string, PackagingSaving[]>());
+  const packagingFor = (r: DashboardRow): PackagingSaving[] => {
+    if (!r.versionData) return [];
+    const input = fbaInputFor(r.versionData, getDesiredPrice(r));
+    const key = JSON.stringify([schedule.id, input]);
+    const cache = packagingCache.current;
+    if (!cache.has(key)) cache.set(key, findPackagingSavings(input, schedule));
+    return cache.get(key)!;
+  };
+  const packagingCount = (filteredRows ?? []).filter((r) => packagingFor(r).length > 0).length;
 
   const setOverride = (
     sku: string,
@@ -150,6 +166,12 @@ export default function DashboardTable() {
         </div>
       </div>
 
+      {packagingCount > 0 && (
+        <p className="mb-2 text-xs text-emerald-700">
+          {packagingCount} {packagingCount === 1 ? "SKU's" : "SKUs'"} FBA fee would drop with a box up to 2 cm
+          smaller on one or two sides. Look for “smaller box saves” under FBA fee and hover it for the exact cut.
+        </p>
+      )}
       {schedule.peakEstimate && (
         <p className="mb-2 text-xs text-amber-700">
           {schedule.label}: FBA fees marked <span className="font-semibold">est.</span> include estimated
@@ -258,6 +280,19 @@ export default function DashboardTable() {
                   <Td className="text-right font-mono" title={m?.peakEstimate ?? undefined}>
                     {m ? fmt$(m.fbaFee) : "—"}
                     {m?.peakEstimate && <span className="ml-1 font-sans text-xs text-amber-700">est.</span>}
+                    {(() => {
+                      const options = m ? packagingFor(row) : [];
+                      if (!options.length) return null;
+                      const best = options[options.length - 1];
+                      return (
+                        <span
+                          className="block font-sans text-xs text-emerald-700 cursor-help"
+                          title={options.map(describeSaving).join("\n")}
+                        >
+                          smaller box saves ${best.savingPerUnit.toFixed(2)}
+                        </span>
+                      );
+                    })()}
                   </Td>
                   <Td className="text-right font-mono">{m ? fmt$(m.shippingStorage) : "—"}</Td>
                   <Td>

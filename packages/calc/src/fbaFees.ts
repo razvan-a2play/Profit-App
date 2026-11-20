@@ -193,6 +193,8 @@ export interface FbaTierResult {
   dimWeight: number;
   weightBasis?: string;
   sipp?: SippEffect;
+  /** The rate-card weight band that priced this unit, e.g. "4+ to 8 oz". */
+  weightBand?: string;
 }
 
 /**
@@ -352,6 +354,7 @@ export function calculateFBATierAndFee(
   // Set when a published rate-card row supplied the bulky/extra-large formula,
   // so the hardcoded fallbacks below don't overwrite it.
   let usedPublishedFormula = false;
+  let weightBand: string | undefined;
   const normalizedTier = sizeTier.toLowerCase();
   // A supplied card wins, but only where it actually has rows for the tier we
   // need — a partial card (e.g. large standard only) falls back per-lookup
@@ -371,6 +374,7 @@ export function calculateFBATierAndFee(
         // Pick the selling-price band when the row carries one. Auditing a
         // $6.42 item against the $10-$50 column (or an $11 item against the
         // Low-Price column) manufactures a variance that isn't real.
+        weightBand = feeRow.weightRange;
         feeNonPeak = bandValue(feeRow, sellingPrice);
         feePeak = bandPeakValue(feeRow, sellingPrice);
 
@@ -502,6 +506,7 @@ export function calculateFBATierAndFee(
     dimWeight,
     weightBasis,
     ...(sipp ? { sipp } : {}),
+    ...(weightBand ? { weightBand } : {}),
   };
 }
 

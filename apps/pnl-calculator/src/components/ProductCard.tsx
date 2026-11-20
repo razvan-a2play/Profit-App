@@ -37,7 +37,7 @@ import { calculateCBMPerUnit, getCBMPerUnit, getCBFPerUnit } from "@platform/cal
 import { calculateShippingCosts, calculateShippingByStrategy } from "@platform/calc";
 import { calculateDimensionalWeight } from "@platform/calc";
 import { calculateTikTokReferralFee, calculateTikTokRefundAdminFee, calculateTikTokFees } from "@platform/calc";
-import { calculateReferralFee, computeAmazonFbaFees } from '@platform/calc';
+import { calculateReferralFee, computeAmazonFbaFees, findPackagingSavings } from '@platform/calc';
 import { useFeeSchedule } from '@/lib/fee-schedule';
 import SummaryBar from './SummaryBar';
 
@@ -247,25 +247,28 @@ const ProductCard = memo<ProductCardProps>(({
   // battery, peak weighting) shared by the fees card, the P&L total and the
   // returns cost, priced with the fee schedule picked in the header.
   const { schedule: feeSchedule } = useFeeSchedule();
-  const amazonFees = useMemo(() => {
-    const input = {
-      length: product.length ?? 0,
-      width: product.width ?? 0,
-      height: product.height ?? 0,
-      weight: product.weight ?? 0,
-      sellingPrice: product.sellingPrice ?? 0,
-      category: product.category ?? '',
-      hazmat: product.hazmat || false,
-      containsBatteries: product.containsBatteries || false,
-      sippEligibleOverride: product.sippEligibleOverride ?? true,
-    };
-    return {
-      fees: computeAmazonFbaFees(input, feeSchedule),
-      // What the same unit would cost without the hazmat surcharge, for the card.
-      regularFees: input.hazmat ? computeAmazonFbaFees({ ...input, hazmat: false }, feeSchedule) : null,
-    };
-  }, [product.length, product.width, product.height, product.weight, product.sellingPrice, product.category, product.hazmat, product.containsBatteries, product.sippEligibleOverride, feeSchedule]);
+  const feeInput = useMemo(() => ({
+    length: product.length ?? 0,
+    width: product.width ?? 0,
+    height: product.height ?? 0,
+    weight: product.weight ?? 0,
+    sellingPrice: product.sellingPrice ?? 0,
+    category: product.category ?? '',
+    hazmat: product.hazmat || false,
+    containsBatteries: product.containsBatteries || false,
+    sippEligibleOverride: product.sippEligibleOverride ?? true,
+  }), [product.length, product.width, product.height, product.weight, product.sellingPrice, product.category, product.hazmat, product.containsBatteries, product.sippEligibleOverride]);
+  const amazonFees = useMemo(() => ({
+    fees: computeAmazonFbaFees(feeInput, feeSchedule),
+    // What the same unit would cost without the hazmat surcharge, for the card.
+    regularFees: feeInput.hazmat ? computeAmazonFbaFees({ ...feeInput, hazmat: false }, feeSchedule) : null,
+  }), [feeInput, feeSchedule]);
   const fees = amazonFees.fees;
+  // Would trimming the box (up to 2 cm, one or two sides) lower the FBA fee?
+  const packagingSavings = useMemo(
+    () => (showAmazonFBA ? findPackagingSavings(feeInput, feeSchedule) : []),
+    [feeInput, feeSchedule, showAmazonFBA],
+  );
 
   const referralData = useMemo(() => (
     calculateReferralFee(product.category, product.sellingPrice ?? 0)
@@ -2989,6 +2992,7 @@ const ProductCard = memo<ProductCardProps>(({
           fees={fees}
           regularFees={amazonFees.regularFees}
           scheduleNotes={feeSchedule.notes}
+          packagingSavings={packagingSavings}
         />
         </div>
 

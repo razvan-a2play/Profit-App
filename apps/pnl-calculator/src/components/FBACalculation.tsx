@@ -2,7 +2,13 @@
 
 import React from 'react';
 import { DollarSign, CheckCircle, XCircle, AlertTriangle } from 'lucide-react';
-import { checkSippEligibility, PRICE_BAND_LABEL, type AmazonFbaFeeBreakdown } from "@platform/calc";
+import {
+  checkSippEligibility,
+  PRICE_BAND_LABEL,
+  type AmazonFbaFeeBreakdown,
+  type PackagingSaving,
+} from "@platform/calc";
+import { describeCuts, describeEffect } from "@/lib/packaging-text";
 
 interface FBACalculationProps {
   length: number;
@@ -19,6 +25,8 @@ interface FBACalculationProps {
   /** Same unit without dangerous-goods rates, for the hazmat comparison. */
   regularFees?: AmazonFbaFeeBreakdown | null;
   scheduleNotes?: string[];
+  /** Box trims (≤2 cm, one or two sides) that lower the FBA fee. */
+  packagingSavings?: PackagingSaving[];
 }
 
 const $ = (n: number) => `$${n.toFixed(2)}`;
@@ -36,6 +44,7 @@ const FBACalculation: React.FC<FBACalculationProps> = ({
   fees,
   regularFees = null,
   scheduleNotes = [],
+  packagingSavings = [],
 }) => {
   const sippEligible = checkSippEligibility(length, width, height);
 
@@ -90,6 +99,38 @@ const FBACalculation: React.FC<FBACalculationProps> = ({
               </div>
             </div>
           </div>
+
+          {/* Packaging check: would a slightly smaller box drop a tier or weight band? */}
+          {packagingSavings.length > 0 ? (
+            <div className="bg-white p-4 rounded-lg border border-emerald-300">
+              <h4 className="font-semibold text-gray-800">
+                A slightly smaller box would lower the FBA fee
+              </h4>
+              <ul className="mt-2 space-y-2 text-sm">
+                {packagingSavings.map((s) => (
+                  <li key={s.cuts.map((c) => `${c.side}${c.toCm}`).join("-")}>
+                    <div className="flex flex-wrap justify-between gap-x-4">
+                      <span className="text-gray-800">{describeCuts(s)}</span>
+                      <span className="font-semibold text-emerald-700">
+                        saves ${s.savingPerUnit.toFixed(2)} per unit
+                      </span>
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      {describeEffect(s)} · FBA fee ${s.before.fbaFee.toFixed(2)} → ${s.after.fbaFee.toFixed(2)}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-3 text-xs text-gray-500">
+                Checked every cut of up to 2 cm on one or two sides. Amazon measures each box and bills
+                the greater of unit and dimensional weight, so leave a few millimetres of margin.
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-gray-500">
+              Packaging check: no cut of up to 2 cm on one or two sides of the box lowers the FBA fee.
+            </p>
+          )}
 
           {/* SIPP Eligibility */}
           <div className="bg-white p-4 rounded-lg border">

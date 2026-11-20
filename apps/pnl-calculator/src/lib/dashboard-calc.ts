@@ -15,6 +15,7 @@
 import {
   calculateShippingCosts,
   computeAmazonFbaFees,
+  type AmazonFbaFeeInput,
   type FeeSchedule,
 } from "@platform/calc";
 import type { Product } from "@/types/product";
@@ -57,6 +58,21 @@ export function computeCogs(product: Product): number {
   return round2(parts.reduce((a, b) => a + b, 0));
 }
 
+/** The FBA fee inputs for a product at a given price (same as the product page). */
+export function fbaInputFor(product: Product, price: number): AmazonFbaFeeInput {
+  return {
+    length: product.length ?? 0,
+    width: product.width ?? 0,
+    height: product.height ?? 0,
+    weight: product.weight ?? 0,
+    sellingPrice: price,
+    category: product.category ?? "",
+    hazmat: !!product.hazmat,
+    containsBatteries: !!product.containsBatteries,
+    sippEligibleOverride: product.sippEligibleOverride ?? true,
+  };
+}
+
 export function computeMetrics(
   product: Product,
   desiredPrice: number,
@@ -67,20 +83,7 @@ export function computeMetrics(
 
   const cogs = computeCogs(product);
 
-  const fees = computeAmazonFbaFees(
-    {
-      length: product.length ?? 0,
-      width: product.width ?? 0,
-      height: product.height ?? 0,
-      weight: product.weight ?? 0,
-      sellingPrice: price,
-      category: product.category ?? "",
-      hazmat: !!product.hazmat,
-      containsBatteries: !!product.containsBatteries,
-      sippEligibleOverride: product.sippEligibleOverride ?? true,
-    },
-    schedule,
-  );
+  const fees = computeAmazonFbaFees(fbaInputFor(product, price), schedule);
   const referralFee = fees.referralFee;
   const fbaFee = fees.fbaWeighted;
 
