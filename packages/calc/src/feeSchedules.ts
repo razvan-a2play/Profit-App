@@ -31,6 +31,21 @@ export interface FeeSchedule {
   fuelSurchargeRate: number;
   /** Fee rows + size tiers. null while status is "pending". */
   table: FeeTableOverride | null;
+  /**
+   * Referral categories (lower case, as in REFERRAL_FEES) that do NOT get the
+   * under-$10 Low-Price FBA rate: they pay the $10-$50 rate at any price.
+   */
+  lowPriceExcludedCategories?: ReadonlyArray<string>;
+  /**
+   * Oversize handling fees, per unit, added on top of the fulfillment fee
+   * (no fuel surcharge). Keyed by lower-case tier name.
+   *   flat:     shortest side < 4 in AND median side >= 25 in
+   *   overhang: median side > 43 in
+   */
+  oversizeHandling?: {
+    flat: Readonly<Record<string, number>>;
+    overhang: Readonly<Record<string, number>>;
+  };
   /** Where the figures came from, and anything estimated. Shown in the UI. */
   notes: string[];
 }
@@ -248,6 +263,7 @@ export const US_2026: FeeSchedule = {
     regular: US_2026_REGULAR,
     hazmat: US_2026_HAZMAT,
     sizeTiers: US_2026_SIZE_TIERS,
+    tierByShippingWeight: true,
     // SIPP discounts: the built-in table (BUILT_IN_SIPP_DISCOUNTS) already
     // matches the 2026 card row for row, so none is set here.
     nonSippPackaging: US_2026_NON_SIPP_PACKAGING,
@@ -260,17 +276,257 @@ export const US_2026: FeeSchedule = {
 };
 
 // ---------------------------------------------------------------------------
-// US 2027 - effective Jan 15, 2027. Rates to be entered.
+// US 2027 - effective Jan 15, 2027
+//
+// Source: Amazon Seller Central, read Nov 20, 2026:
+//   "2027 US FBA fulfillment fee changes" (GABBX6GZPA8MSZGW) - rate cards
+//   "Product size tiers" (GG5KW835AHDJCH8W) - 2027 tier definitions
+//   "Oversize handling fees" (G7BWWPF848CW9DGH)
+//   "2027 US Low Price FBA fulfillment fee" (GMUTB89XM7AATPR3)
+//   "SIPP FBA fulfillment fee" (GFGVB6C7ZF38285W) - discounts unchanged,
+//     packaging fee now covers all four bulky tiers
+//   "2027 returns processing fee changes" (GZGEQLTM3RZXUV6T) - same rates,
+//     new tiers mapped onto them (calculateReturnProcessingFee)
+// Amazon's worked examples on those pages are the regression tests in
+// amazonFees.test.ts.
+//
+// Holiday peak (Oct 15, 2027 - Jan 14, 2028) rates are NOT published yet.
+// Until they are, peak = 2027 non-peak + the 2026 peak premium for the same
+// row and price column (estimatePeakFrom below), and the UI says so.
 // ---------------------------------------------------------------------------
+
+/** [weight band, <$10, $10-50, >$50]; peak filled in by estimatePeakFrom. */
+type NonPeakBand = readonly [string, number, number, number];
+
+function nonPeakRows(tier: string, weightBasis: string, bands: ReadonlyArray<NonPeakBand>): FbaFeeRow[] {
+  return bands.map(([weightRange, low, mid, high]) => ({
+    tier,
+    weightRange,
+    weightBasis,
+    lowPrice: low,
+    nonPeak: mid,
+    highPrice: high,
+    peak: mid,
+  }));
+}
+
+/** One formula row per bulky/oversize tier: [tier, <$10, $10+, $ per lb, above lb]. */
+type OversizeTier = readonly [string, number, number, number, number];
+
+function oversizeRows(tiers: ReadonlyArray<OversizeTier>): FbaFeeRow[] {
+  // "0+ lb": the tier itself bounds the weight, and special oversize heavy is
+  // priced on unit weight, which can sit below its 150 lb shipping weight.
+  return tiers.map(([tier, low, mid, perLb, aboveLb]) => ({
+    tier,
+    weightRange: "0+ lb",
+    weightBasis: GREATER,
+    lowPrice: low,
+    nonPeak: mid,
+    highPrice: mid,
+    peak: mid,
+    surchargePerInterval: perLb,
+    surchargeIntervalLb: 1,
+    surchargeAboveLb: aboveLb,
+  }));
+}
+
+/** Which 2026 row's peak premium stands in for each new 2027 tier. */
+const PEAK_PREMIUM_SOURCE: Record<string, readonly [string, string]> = {
+  "small bulky": ["small bulky", "0+ lb"],
+  "medium bulky": ["small bulky", "0+ lb"],
+  "large bulky": ["large bulky", "0+ lb"],
+  "extra-large bulky": ["large bulky", "0+ lb"],
+  "small oversize": ["extra-large", "0 to 50 lb"],
+  "medium oversize": ["extra-large", "50+ to 70 lb"],
+  "large oversize": ["extra-large", "70+ to 150 lb"],
+  "long oversize": ["extra-large", "70+ to 150 lb"],
+  "special oversize light": ["extra-large", "70+ to 150 lb"],
+  "special oversize heavy": ["extra-large", "150+ lb"],
+};
+
+/**
+ * Estimated peak: this year's non-peak rate plus last year's peak premium
+ * (peak minus non-peak) for the same row and price column.
+ */
+function estimatePeakFrom(rows: FbaFeeRow[], previous: FbaFeeRow[]): FbaFeeRow[] {
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  return rows.map((row) => {
+    const [tier, band] = PEAK_PREMIUM_SOURCE[row.tier] ?? [row.tier, row.weightRange];
+    const prev = previous.find((p) => p.tier === tier && p.weightRange === band);
+    if (!prev) return row;
+    const midPremium = prev.peak - prev.nonPeak;
+    const lowPremium = prev.peakLowPrice != null && prev.lowPrice != null ? prev.peakLowPrice - prev.lowPrice : midPremium;
+    const highPremium = prev.peakHighPrice != null && prev.highPrice != null ? prev.peakHighPrice - prev.highPrice : midPremium;
+    return {
+      ...row,
+      peak: r2(row.nonPeak + midPremium),
+      peakLowPrice: row.lowPrice != null ? r2(row.lowPrice + lowPremium) : null,
+      peakHighPrice: row.highPrice != null ? r2(row.highPrice + highPremium) : null,
+    };
+  });
+}
+
+const US_2027_REGULAR_NON_PEAK: FbaFeeRow[] = [
+  ...nonPeakRows("small standard", UNIT, [
+    ["2 oz or less", 2.64, 3.75, 4.31],
+    ["2+ to 4 oz", 2.72, 3.78, 4.34],
+    ["4+ to 6 oz", 2.8, 3.92, 4.47],
+    ["6+ to 8 oz", 2.83, 3.97, 4.53],
+    ["8+ to 10 oz", 2.87, 4.06, 4.62],
+    ["10+ to 12 oz", 2.92, 4.16, 4.73],
+    ["12+ to 14 oz", 2.96, 4.3, 4.85],
+    ["14+ to 16 oz", 2.99, 4.32, 4.88],
+  ]),
+  ...nonPeakRows("large standard", GREATER, [
+    ["4 oz or less", 2.91, 3.79, 4.35],
+    ["4+ to 8 oz", 3.13, 4.01, 4.57],
+    ["8+ to 12 oz", 3.38, 4.26, 4.83],
+    ["12+ to 16 oz", 3.78, 4.67, 5.23],
+    ["1+ to 1.25 lb", 4.22, 5.19, 5.75],
+    ["1.25+ to 1.5 lb", 4.6, 5.57, 6.14],
+    ["1.5+ to 1.75 lb", 4.75, 5.72, 6.29],
+    ["1.75+ to 2 lb", 5.0, 5.98, 6.54],
+    ["2+ to 2.25 lb", 5.1, 6.08, 6.64],
+    ["2.25+ to 2.5 lb", 5.28, 6.26, 6.83],
+    ["2.5+ to 2.75 lb", 5.44, 6.42, 6.99],
+    ["2.75+ to 3 lb", 5.85, 6.85, 7.41],
+  ]),
+  {
+    ...US_2026_LARGE_STANDARD_HEAVY,
+    lowPrice: 6.15,
+    nonPeak: 7.16,
+    highPrice: 7.73,
+    peak: 7.16,
+    peakLowPrice: null,
+    peakHighPrice: null,
+  },
+  ...oversizeRows([
+    ["small bulky", 6.73, 7.51, 0.39, 1],
+    ["medium bulky", 6.88, 7.66, 0.39, 1],
+    ["large bulky", 9.09, 9.88, 0.39, 1],
+    ["extra-large bulky", 9.31, 10.09, 0.39, 1],
+    ["small oversize", 13.44, 14.22, 0.28, 1],
+    ["medium oversize", 27.36, 28.15, 0.56, 51],
+    ["large oversize", 37.97, 38.75, 0.68, 51],
+    ["long oversize", 62.97, 63.75, 0.3, 1],
+    ["special oversize light", 71.09, 71.87, 0.3, 1],
+    ["special oversize heavy", 190.5, 191.28, 0.19, 151],
+  ]),
+];
+
+const US_2027_HAZMAT_NON_PEAK: FbaFeeRow[] = [
+  ...nonPeakRows("small standard", UNIT, [
+    ["2 oz or less", 3.57, 4.59, 5.15],
+    ["2+ to 4 oz", 3.62, 4.61, 5.17],
+    ["4+ to 6 oz", 3.69, 4.75, 5.32],
+    ["6+ to 8 oz", 3.71, 4.8, 5.37],
+    ["8+ to 10 oz", 3.74, 4.88, 5.45],
+    ["10+ to 12 oz", 3.75, 4.97, 5.54],
+    ["12+ to 14 oz", 3.79, 5.01, 5.57],
+    ["14+ to 16 oz", 3.83, 5.04, 5.6],
+  ]),
+  ...nonPeakRows("large standard", GREATER, [
+    ["4 oz or less", 3.73, 4.62, 5.18],
+    ["4+ to 8 oz", 3.94, 4.83, 5.4],
+    ["8+ to 12 oz", 4.17, 5.06, 5.63],
+    ["12+ to 16 oz", 4.37, 5.27, 5.83],
+    ["1+ to 1.25 lb", 4.82, 5.79, 6.36],
+    ["1.25+ to 1.5 lb", 5.2, 6.18, 6.74],
+    ["1.5+ to 1.75 lb", 5.35, 6.33, 6.9],
+    ["1.75+ to 2 lb", 5.49, 6.47, 7.04],
+    ["2+ to 2.25 lb", 5.56, 6.55, 7.11],
+    ["2.25+ to 2.5 lb", 5.74, 6.73, 7.29],
+    ["2.5+ to 2.75 lb", 5.9, 6.89, 7.45],
+    ["2.75+ to 3 lb", 6.31, 7.32, 7.88],
+  ]),
+  {
+    ...US_2026_LARGE_STANDARD_HEAVY,
+    lowPrice: 6.61,
+    nonPeak: 7.63,
+    highPrice: 8.2,
+    peak: 7.63,
+    peakLowPrice: null,
+    peakHighPrice: null,
+  },
+  ...oversizeRows([
+    ["small bulky", 7.46, 8.24, 0.39, 1],
+    ["medium bulky", 7.61, 8.39, 0.39, 1],
+    ["large bulky", 9.83, 10.61, 0.39, 1],
+    ["extra-large bulky", 10.04, 10.82, 0.39, 1],
+    ["small oversize", 15.58, 16.36, 0.28, 1],
+    ["medium oversize", 30.62, 31.4, 0.56, 51],
+    ["large oversize", 45.21, 45.99, 0.68, 51],
+    ["long oversize", 70.21, 70.99, 0.3, 1],
+    ["special oversize light", 78.33, 79.11, 0.3, 1],
+    ["special oversize heavy", 215.44, 216.23, 0.19, 151],
+  ]),
+];
+
+const US_2027_SIZE_TIERS: ReadonlyArray<SizeTier> = [
+  { name: "Small standard", maxWeight: 1, maxLongest: 15, maxMedian: 12, maxShortest: 0.75, maxLPG: null, weightBasis: UNIT },
+  { name: "Large standard", maxWeight: 20, maxLongest: 18, maxMedian: 14, maxShortest: 8, maxLPG: null, weightBasis: GREATER },
+  { name: "Small bulky", maxWeight: 50, maxLongest: 28, maxMedian: 24, maxShortest: 20, maxLPG: 130, weightBasis: GREATER },
+  { name: "Medium bulky", maxWeight: 50, maxLongest: 37, maxMedian: 28, maxShortest: 20, maxLPG: 130, weightBasis: GREATER },
+  { name: "Large bulky", maxWeight: 50, maxLongest: 52, maxMedian: 28, maxShortest: 28, maxLPG: 130, weightBasis: GREATER },
+  { name: "Extra-large bulky", maxWeight: 50, maxLongest: 59, maxMedian: 33, maxShortest: 33, maxLPG: 130, weightBasis: GREATER },
+  { name: "Small oversize", maxWeight: 50, maxLongest: 72, maxMedian: null, maxShortest: null, maxLPG: 130, weightBasis: GREATER },
+  { name: "Medium oversize", maxWeight: 70, maxLongest: 78, maxMedian: null, maxShortest: null, maxLPG: 130, weightBasis: GREATER },
+  { name: "Large oversize", maxWeight: 150, maxLongest: 96, maxMedian: null, maxShortest: null, maxLPG: 130, weightBasis: GREATER },
+  { name: "Long oversize", maxWeight: 150, maxLongest: 108, maxMedian: null, maxShortest: null, maxLPG: 165, weightBasis: GREATER },
+  { name: "Special oversize light", maxWeight: 150, maxLongest: null, maxMedian: null, maxShortest: null, maxLPG: null, weightBasis: GREATER },
+  // Priced on unit weight (Amazon), though it is over 150 lb by shipping weight.
+  { name: "Special oversize heavy", maxWeight: null, maxLongest: null, maxMedian: null, maxShortest: null, maxLPG: null, weightBasis: UNIT },
+];
+
+/** Same packaging fee as 2026, now for all four bulky tiers. */
+const US_2027_NON_SIPP_PACKAGING: FbaFeeRow[] = US_2026_NON_SIPP_PACKAGING.filter(
+  (r) => r.tier === "small bulky",
+).flatMap((r) =>
+  ["small bulky", "medium bulky", "large bulky", "extra-large bulky"].map((tier) => ({ ...r, tier })),
+);
 
 export const US_2027: FeeSchedule = {
   id: "us-2027",
   label: "2027 rates",
   effectiveFrom: "2027-01-15",
-  status: "pending",
+  status: "ready",
   fuelSurchargeRate: 0.035,
-  table: null,
-  notes: ["Announced Nov 5, 2026. Rates not entered yet."],
+  table: {
+    regular: estimatePeakFrom(US_2027_REGULAR_NON_PEAK, US_2026_REGULAR),
+    hazmat: estimatePeakFrom(US_2027_HAZMAT_NON_PEAK, US_2026_HAZMAT),
+    sizeTiers: US_2027_SIZE_TIERS,
+    tierByShippingWeight: true,
+    // SIPP discounts unchanged for 2027: BUILT_IN_SIPP_DISCOUNTS still applies.
+    nonSippPackaging: US_2027_NON_SIPP_PACKAGING,
+  },
+  lowPriceExcludedCategories: [
+    "automotive and powersports",
+    "computers",
+    "personal computers",
+    "musical instruments",
+    "books",
+  ],
+  oversizeHandling: {
+    flat: {
+      "small oversize": 8.4,
+      "medium oversize": 8.65,
+      "large oversize": 9.42,
+      "long oversize": 10.48,
+      "special oversize light": 21.67,
+      "special oversize heavy": 29.53,
+    },
+    overhang: {
+      "long oversize": 3.45,
+      "special oversize light": 5.23,
+      "special oversize heavy": 10.45,
+    },
+  },
+  notes: [
+    "Amazon's 2027 US rate card (effective Jan 15, 2027), from Seller Central. New bulky and oversize tiers.",
+    "Holiday peak 2027 rates aren't published yet: peak is estimated as 2027 non-peak + 2026's peak markup.",
+    "Under $10, Automotive, Computers, Musical Instruments and Media pay the $10–$50 rate.",
+    "Oversize items can add Amazon's flat-product and overhang handling fees.",
+  ],
 };
 
 export const FEE_SCHEDULES: ReadonlyArray<FeeSchedule> = [US_2026, US_2027];

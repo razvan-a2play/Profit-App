@@ -226,6 +226,13 @@ export interface FeeTableOverride {
    * Omitted, the built-in SIZE_TIERS are used.
    */
   sizeTiers?: ReadonlyArray<SizeTier>;
+  /**
+   * Amazon assigns size tiers by SHIPPING weight (greater of unit and
+   * dimensional weight), so a big light box whose dimensional weight passes
+   * 50 lb is extra-large/oversize, not bulky. Set by the dated schedules; the
+   * built-in path keeps classifying on unit weight as it always has.
+   */
+  tierByShippingWeight?: boolean;
 }
 
 /**
@@ -323,8 +330,9 @@ export function calculateFBATierAndFee(
   let sizeTier = "Unknown";
   let weightBasis = "Greater of unit or dimensional weight";
 
+  const tierWeightLb = feeTableOverride?.tierByShippingWeight ? Math.max(weightLb, dimWeight) : weightLb;
   for (const tier of feeTableOverride?.sizeTiers ?? SIZE_TIERS) {
-    const meetsWeight = !tier.maxWeight || weightLb <= tier.maxWeight;
+    const meetsWeight = !tier.maxWeight || tierWeightLb <= tier.maxWeight;
     const meetsLongest = !tier.maxLongest || longest <= tier.maxLongest;
     const meetsMedian = !tier.maxMedian || median <= tier.maxMedian;
     const meetsShortest = !tier.maxShortest || shortest <= tier.maxShortest;
@@ -568,6 +576,17 @@ export function calculateReturnProcessingFee(sizeTier: string, shippingWeightOz:
   if (normalizedTier.includes("large standard")) normalizedTier = "large standard";
   // Amazon's returns table has one "bulky" row; every bulky tier uses it.
   if (normalizedTier.includes("bulky")) normalizedTier = "large bulky";
+  // 2027 oversize tiers reuse the extra-large return rates (Amazon's 2027
+  // returns processing fee page maps them one-to-one).
+  const oversize: Record<string, string> = {
+    "small oversize": "extra large 0 to 50",
+    "medium oversize": "extra large 50",
+    "large oversize": "extra large 70",
+    "long oversize": "extra large 70",
+    "special oversize light": "extra large 70",
+    "special oversize heavy": "extra large 150",
+  };
+  if (oversize[normalizedTier]) normalizedTier = oversize[normalizedTier];
   // The fee engine names the tier plain "Extra-large"; the returns table
   // splits it by shipping weight. Without this an extra-large return cost $0.
   if (normalizedTier === "extra large") {
@@ -599,12 +618,16 @@ export function calculateReturnProcessingFee(sizeTier: string, shippingWeightOz:
     ],
   };
 
+  // Amazon charges per whole 1-lb interval above the threshold, so a part
+  // pound counts as a full one (its baby-cot example: 7.9 lb -> 7 intervals,
+  // $6.74 + 7 x $0.32 = $8.98).
+  const over = (lb: number, above: number) => Math.ceil(Math.max(0, lb - above));
   const tiersLb: Record<string, (lb: number) => number> = {
-    "large bulky": (lb) => 6.74 + 0.32 * Math.max(0, lb - 1),
-    "extra-large 0 to 50 lb": (lb) => 26.33 + 0.38 * Math.max(0, lb - 1),
-    "extra-large 50+ to 70 lb": (lb) => 40.12 + 0.75 * Math.max(0, lb - 51),
-    "extra-large 70+ to 150 lb": (lb) => 52.45 + 0.75 * Math.max(0, lb - 71),
-    "extra-large 150+ lb": (lb) => 157.35 + 0.19 * Math.max(0, lb - 151),
+    "large bulky": (lb) => 6.74 + 0.32 * over(lb, 1),
+    "extra-large 0 to 50 lb": (lb) => 26.33 + 0.38 * over(lb, 1),
+    "extra-large 50+ to 70 lb": (lb) => 40.12 + 0.75 * over(lb, 51),
+    "extra-large 70+ to 150 lb": (lb) => 52.45 + 0.75 * over(lb, 71),
+    "extra-large 150+ lb": (lb) => 157.35 + 0.19 * over(lb, 151),
   };
 
   if (tiersOz[normalizedTier]) {

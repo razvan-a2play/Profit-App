@@ -64,9 +64,18 @@ export interface AmazonFbaFeeBreakdown {
   sippCertified: boolean;
   /** Positive amount taken off (0 when none applies). */
   sippDiscount: number;
+  /** Amazon's packaging fee for a bulky unit that isn't SIPP-certified. */
+  packagingFee: number;
+  /** Oversize flat-product + overhang handling fees (2027+), no surcharge. */
+  handlingFee: number;
+  /**
+   * Under $10 but in a category Amazon excludes from Low-Price FBA rates, so
+   * charged the $10-$50 rate.
+   */
+  lowPriceExcluded: boolean;
   batteryFee: number;
 
-  /** fulfillment + surcharge - SIPP + battery. */
+  /** fulfillment + surcharge - SIPP + packaging + handling + battery. */
   fbaNonPeak: number;
   fbaPeak: number;
   fbaWeighted: number;
@@ -111,16 +120,34 @@ export function computeAmazonFbaFees(
     height > 0 &&
     checkSippEligibility(length, width, height) === "YES";
 
+  // Low-Price FBA rates only for eligible categories: an excluded category
+  // under $10 is priced from the $10-$50 column (the referral fee still uses
+  // the real price).
+  const category = (input.category ?? "").toLowerCase().trim();
+  const lowPriceExcluded =
+    price > 0 && price < 10 && (schedule.lowPriceExcludedCategories ?? []).includes(category);
+  const priceForColumn = lowPriceExcluded ? 10 : price;
+
   const fba = calculateFBATierAndFee(
     length,
     width,
     height,
     weight,
-    price,
+    priceForColumn,
     hazmat,
     schedule.table ?? undefined,
     sippCertified,
   );
+
+  // Oversize handling fees, from the sorted box dimensions in inches.
+  let handlingFee = 0;
+  const handling = schedule.oversizeHandling;
+  const tierKey = fba.tier.toLowerCase();
+  if (handling && fba.feeNonPeak > 0) {
+    const [, median, shortest] = [length, width, height].map((cm) => cm / 2.54).sort((a, b) => b - a);
+    if (shortest < 4 && median >= 25) handlingFee += handling.flat[tierKey] ?? 0;
+    if (median > 43) handlingFee += handling.overhang[tierKey] ?? 0;
+  }
 
   const rate = schedule.fuelSurchargeRate;
   const surchargeNonPeak = round2(fba.feeNonPeak * rate);
@@ -134,12 +161,9 @@ export function computeAmazonFbaFees(
   const packagingFee = sippAmount > 0 ? sippAmount : 0;
   const batteryFee = input.containsBatteries && fba.feeNonPeak > 0 ? BATTERY_FEE_PER_UNIT : 0;
 
-  const fbaNonPeak = fba.feeNonPeak > 0
-    ? fba.feeNonPeak + surchargeNonPeak - sippDiscount + packagingFee + batteryFee
-    : 0;
-  const fbaPeak = fba.feePeak > 0
-    ? fba.feePeak + surchargePeak - sippDiscount + packagingFee + batteryFee
-    : 0;
+  const extras = -sippDiscount + packagingFee + handlingFee + batteryFee;
+  const fbaNonPeak = fba.feeNonPeak > 0 ? fba.feeNonPeak + surchargeNonPeak + extras : 0;
+  const fbaPeak = fba.feePeak > 0 ? fba.feePeak + surchargePeak + extras : 0;
 
   const referral = calculateReferralFee(input.category ?? "", price);
   const referralFee = referral.fee ?? 0;
@@ -147,7 +171,7 @@ export function computeAmazonFbaFees(
   return {
     scheduleId: schedule.id,
     scheduleLabel: schedule.label,
-    priceBand: priceBandOf(price),
+    priceBand: priceBandOf(priceForColumn),
     fba,
     tier: fba.tier,
     billableWeight: fba.billableWeight,
@@ -160,6 +184,9 @@ export function computeAmazonFbaFees(
     surchargePeak,
     sippCertified,
     sippDiscount,
+    packagingFee,
+    handlingFee,
+    lowPriceExcluded,
     batteryFee,
 
     fbaNonPeak,

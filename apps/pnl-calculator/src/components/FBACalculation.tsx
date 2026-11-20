@@ -58,6 +58,7 @@ const FBACalculation: React.FC<FBACalculationProps> = ({
         </span>
         <span className="text-sm font-normal text-yellow-700">
           {fees.scheduleLabel} · {PRICE_BAND_LABEL[fees.priceBand]} price column
+          {fees.lowPriceExcluded && " (this category doesn't get Low-Price rates under $10)"}
         </span>
       </h3>
 
@@ -242,6 +243,18 @@ const FBACalculation: React.FC<FBACalculationProps> = ({
                 <div className="flex justify-between text-green-600">
                   <span>- SIPP Discount:</span>
                   <span>-{$(fees.sippDiscount)}</span>
+                </div>
+              )}
+              {fees.packagingFee > 0 && (
+                <div className="flex justify-between">
+                  <span>+ Packaging Fee (bulky, not SIPP-certified):</span>
+                  <span>{$(fees.packagingFee)}</span>
+                </div>
+              )}
+              {fees.handlingFee > 0 && (
+                <div className="flex justify-between">
+                  <span>+ Oversize Handling Fee (flat product / overhang):</span>
+                  <span>{$(fees.handlingFee)}</span>
                 </div>
               )}
               {fees.batteryFee > 0 && (
