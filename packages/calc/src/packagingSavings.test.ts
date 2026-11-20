@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findPackagingSavings } from "./packagingSavings";
+import { feeWeightDriver, findPackagingSavings, findWeightSavings } from "./packagingSavings";
 import { US_2026, US_2027 } from "./feeSchedules";
 
 describe("findPackagingSavings", () => {
@@ -59,5 +59,39 @@ describe("findPackagingSavings", () => {
     const ms = performance.now() - t0;
     console.log(`25 products: ${ms.toFixed(0)} ms`);
     expect(ms).toBeLessThan(2000);
+  });
+});
+
+describe("findWeightSavings", () => {
+  // SEZ0101012 live snapshot: 21.5 x 15.3 x 8.1 cm, 1.32 kg (2.91 lb), $20.
+  // Dimensional weight is only 1.17 lb, so the actual weight sets the band.
+  const pad = { length: 21.5, width: 15.3, height: 8.1, weight: 1.32, sellingPrice: 20, category: "toys and games" };
+
+  it("says the actual weight, not the box, sets SEZ0101012's fee", () => {
+    expect(feeWeightDriver(pad, US_2027)).toBe("actual weight");
+    expect(findPackagingSavings(pad, US_2027, { maxReductionCm: 10, maxPairReductionCm: 5, pairStepCm: 0.2 })).toEqual([]);
+  });
+
+  it("finds 73 g lighter drops it from 2.75-3 lb to 2.5-2.75 lb", () => {
+    const [first] = findWeightSavings(pad, US_2027);
+    expect(first.byKg).toBeCloseTo(0.073, 3);
+    expect(first.before.weightBand).toBe("2.75+ to 3 lb");
+    expect(first.after.weightBand).toBe("2.5+ to 2.75 lb");
+    // 2027 weighted fee 7.055 -> 6.605
+    expect(first.savingPerUnit).toBeCloseTo(0.45, 2);
+    expect(findWeightSavings(pad, US_2026)[0].savingPerUnit).toBeCloseTo(0.425, 3);
+  });
+
+  it("finds nothing for a box-size-driven product (Beetle Brush)", () => {
+    const brush = { length: 7.8, width: 4.3, height: 17.1, weight: 0.109, sellingPrice: 7.99, category: "baby products" };
+    expect(feeWeightDriver(brush, US_2026)).toBe("box size");
+    expect(findWeightSavings(brush, US_2026)).toEqual([]);
+  });
+
+  it("wide box search stays fast", () => {
+    const box = { length: 30, width: 25, height: 12, weight: 1, sellingPrice: 25, category: "toys and games" };
+    const t0 = performance.now();
+    for (let i = 0; i < 10; i++) findPackagingSavings(box, US_2027, { maxReductionCm: 10, maxPairReductionCm: 5, pairStepCm: 0.2 });
+    console.log(`wide search x10: ${(performance.now() - t0).toFixed(0)} ms`);
   });
 });

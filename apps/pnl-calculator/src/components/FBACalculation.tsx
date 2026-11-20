@@ -7,8 +7,9 @@ import {
   PRICE_BAND_LABEL,
   type AmazonFbaFeeBreakdown,
   type PackagingSaving,
+  type WeightSaving,
 } from "@platform/calc";
-import { describeCuts } from "@/lib/packaging-text";
+import { describeCuts, describeWeightCut } from "@/lib/packaging-text";
 
 interface FBACalculationProps {
   length: number;
@@ -25,8 +26,10 @@ interface FBACalculationProps {
   /** Same unit without dangerous-goods rates, for the hazmat comparison. */
   regularFees?: AmazonFbaFeeBreakdown | null;
   scheduleNotes?: string[];
-  /** Box trims (≤2 cm, one or two sides) that lower the FBA fee. */
+  /** Box trims that lower the FBA fee (details under Packaging Dimensions). */
   packagingSavings?: PackagingSaving[];
+  /** Weight reductions that lower the FBA fee. */
+  weightSavings?: WeightSaving[];
 }
 
 const $ = (n: number) => `$${n.toFixed(2)}`;
@@ -45,7 +48,13 @@ const FBACalculation: React.FC<FBACalculationProps> = ({
   regularFees = null,
   scheduleNotes = [],
   packagingSavings = [],
+  weightSavings = [],
 }) => {
+  // The single easiest change that saves, for the one-line pointer below.
+  const firstChange = [
+    ...weightSavings.map((w) => ({ text: describeWeightCut(w), saving: w.savingPerUnit, size: w.byKg * 20 })),
+    ...packagingSavings.map((s) => ({ text: describeCuts(s).replace(/^Trim/, "trimming"), saving: s.savingPerUnit, size: s.totalCutCm })),
+  ].sort((a, b) => a.size - b.size)[0];
   const sippEligible = checkSippEligibility(length, width, height);
 
   // SIPP dimension checks for display
@@ -101,17 +110,14 @@ const FBACalculation: React.FC<FBACalculationProps> = ({
           </div>
 
           {/* Packaging check: details live under Packaging Dimensions, where the box is entered */}
-          {packagingSavings.length > 0 ? (
-            <p className="text-sm text-emerald-700">
-              Packaging check: {describeCuts(packagingSavings[0]).toLowerCase()} saves $
-              {packagingSavings[0].savingPerUnit.toFixed(2)} per unit
-              {packagingSavings.length > 1 &&
-                `, up to $${packagingSavings[packagingSavings.length - 1].savingPerUnit.toFixed(2)} with a bigger cut`}
-              . Details under Packaging Dimensions.
+          {firstChange ? (
+            <p className="text-sm font-medium text-emerald-700">
+              FBA fee check: {firstChange.text} saves ${firstChange.saving.toFixed(2)} per unit. See the
+              FBA fee check under Packaging Dimensions for every option.
             </p>
           ) : (
-            <p className="text-xs text-gray-500">
-              Packaging check: no cut of up to 2 cm on one or two sides of the box lowers the FBA fee.
+            <p className="text-sm text-gray-600">
+              FBA fee check: no weight or box change within reach lowers the FBA fee.
             </p>
           )}
 

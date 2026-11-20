@@ -48,6 +48,10 @@ export interface PackagingSavingsOptions {
   maxReductionCm?: number;
   /** Search resolution (default 0.1 cm). */
   stepCm?: number;
+  /** Largest cut per side when two sides change together (default maxReductionCm). */
+  maxPairReductionCm?: number;
+  /** Resolution of the two-side search (default stepCm); coarser keeps wide searches fast. */
+  pairStepCm?: number;
   /** Sides changed at once: 1, or 2 (default). Never all three. */
   maxSides?: 1 | 2;
   /** Ignore savings smaller than this per unit (default half a cent). */
@@ -81,11 +85,15 @@ export function findPackagingSavings(
   options: PackagingSavingsOptions = {},
 ): PackagingSaving[] {
   const { maxReductionCm = 2, stepCm = 0.1, maxSides = 2, minSaving = 0.005, limit = 3 } = options;
+  const maxPair = options.maxPairReductionCm ?? maxReductionCm;
+  const pairStep = options.pairStepCm ?? stepCm;
   const base = computeAmazonFbaFees(input, schedule);
   if (!(base.fbaWeighted > 0)) return [];
 
-  const steps = Math.round(maxReductionCm / stepCm);
-  const cutsCm = Array.from({ length: steps }, (_, i) => r2((i + 1) * stepCm));
+  const range = (max: number, step: number) =>
+    Array.from({ length: Math.round(max / step) }, (_, i) => r2((i + 1) * step));
+  const cutsCm = range(maxReductionCm, stepCm);
+  const pairCutsCm = range(maxPair, pairStep);
   const before = snapshot(base);
   const found: PackagingSaving[] = [];
 
@@ -116,7 +124,7 @@ export function findPackagingSavings(
   if (maxSides >= 2) {
     for (let i = 0; i < SIDES.length; i++)
       for (let j = i + 1; j < SIDES.length; j++)
-        for (const a of cutsCm) for (const b of cutsCm) tryCuts([[SIDES[i], a], [SIDES[j], b]]);
+        for (const a of pairCutsCm) for (const b of pairCutsCm) tryCuts([[SIDES[i], a], [SIDES[j], b]]);
   }
 
   // Smallest change first; among equal change, fewer sides, then more saving.
@@ -136,4 +144,70 @@ export function findPackagingSavings(
     }
   }
   return options_.slice(0, limit);
+}
+
+// ---------------------------------------------------------------------------
+// Weight: the same idea for products whose ACTUAL weight sets the band (a box
+// cut can't help those - dimensional weight is already below unit weight).
+// ---------------------------------------------------------------------------
+
+export interface WeightSaving {
+  fromKg: number;
+  toKg: number;
+  /** How much lighter the packed unit has to be, in kg. */
+  byKg: number;
+  savingPerUnit: number;
+  before: FeeSnapshot;
+  after: FeeSnapshot;
+}
+
+export interface WeightSavingsOptions {
+  /** Largest reduction considered (default: half the unit weight, at most 1 kg). */
+  maxReductionKg?: number;
+  /** Search resolution (default 1 g). */
+  stepKg?: number;
+  minSaving?: number;
+  /** Most options returned (default 2). */
+  limit?: number;
+}
+
+/**
+ * The smallest weight reductions that lower the per-unit FBA fee, lightest
+ * change first, each later one saving more. Empty when no reduction within
+ * reach changes the fee (e.g. the box size, not the weight, sets it).
+ */
+export function findWeightSavings(
+  input: AmazonFbaFeeInput,
+  schedule: FeeSchedule,
+  options: WeightSavingsOptions = {},
+): WeightSaving[] {
+  const weight = input.weight || 0;
+  const { stepKg = 0.001, minSaving = 0.005, limit = 2 } = options;
+  const maxKg = options.maxReductionKg ?? Math.min(weight / 2, 1);
+  const base = computeAmazonFbaFees(input, schedule);
+  if (!(base.fbaWeighted > 0) || !(weight > 0)) return [];
+
+  const before = snapshot(base);
+  const out: WeightSaving[] = [];
+  let best = 0;
+  const steps = Math.round(maxKg / stepKg);
+  for (let i = 1; i <= steps && out.length < limit; i++) {
+    const by = Math.round(i * stepKg * 1e6) / 1e6;
+    const to = Math.round((weight - by) * 1e6) / 1e6;
+    if (!(to > 0)) break;
+    const f = computeAmazonFbaFees({ ...input, weight: to }, schedule);
+    const saving = base.fbaWeighted - f.fbaWeighted;
+    if (saving >= minSaving && saving > best + 0.0049) {
+      out.push({ fromKg: weight, toKg: to, byKg: by, savingPerUnit: saving, before, after: snapshot(f) });
+      best = saving;
+    }
+  }
+  return out;
+}
+
+/** Whether the fee is priced on the unit's actual weight or on its box size. */
+export function feeWeightDriver(input: AmazonFbaFeeInput, schedule: FeeSchedule): "actual weight" | "box size" {
+  const f = computeAmazonFbaFees(input, schedule);
+  const unitLb = (input.weight || 0) / 0.453592;
+  return f.fba.weightBasis === "Unit weight" || unitLb >= f.dimWeight ? "actual weight" : "box size";
 }

@@ -1,8 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { findPackagingSavings, type PackagingSaving } from "@platform/calc";
-import { describeSaving } from "@/lib/packaging-text";
+import { findPackagingSavings, findWeightSavings } from "@platform/calc";
+import {
+  CLOSE_CUT_CM,
+  CLOSE_CUT_KG,
+  describeSaving,
+  describeWeightSaving,
+} from "@/lib/packaging-text";
 import Link from "next/link";
 import { Button, Input, useToast } from "@platform/ui";
 import { loadDashboardRows, type DashboardRow, type VersionStatus } from "@/lib/dashboard-data";
@@ -69,19 +74,29 @@ export default function DashboardTable() {
   const getTacosPercent = (r: DashboardRow): number =>
     overrides[r.sku]?.tacosPercent ?? Number(r.versionData?.marketingTacosPercentage ?? 0);
 
-  // Packaging check per row: box trims (≤2 cm, one or two sides) that lower
-  // the FBA fee. Cached on everything that moves the fee, so typing a price
-  // only re-checks that row.
-  const packagingCache = useRef(new Map<string, PackagingSaving[]>());
-  const packagingFor = (r: DashboardRow): PackagingSaving[] => {
-    if (!r.versionData) return [];
+  // FBA fee check per row, small changes only (box ≤2 cm smaller on one or
+  // two sides, or ≤100 g lighter). Cached on everything that moves the fee,
+  // so typing a price only re-checks that row.
+  type RowCheck = { lines: string[]; best: { label: string; saving: number } | null };
+  const packagingCache = useRef(new Map<string, RowCheck>());
+  const packagingFor = (r: DashboardRow): RowCheck => {
+    if (!r.versionData) return { lines: [], best: null };
     const input = fbaInputFor(r.versionData, getDesiredPrice(r));
     const key = JSON.stringify([schedule.id, input]);
     const cache = packagingCache.current;
-    if (!cache.has(key)) cache.set(key, findPackagingSavings(input, schedule));
+    if (!cache.has(key)) {
+      const box = findPackagingSavings(input, schedule, { maxReductionCm: CLOSE_CUT_CM });
+      const weight = findWeightSavings(input, schedule, { maxReductionKg: CLOSE_CUT_KG });
+      const options = [
+        ...weight.map((w) => ({ label: `${Math.round(w.byKg * 1000)} g lighter`, saving: w.savingPerUnit, line: describeWeightSaving(w) })),
+        ...box.map((s) => ({ label: "smaller box", saving: s.savingPerUnit, line: describeSaving(s) })),
+      ];
+      const top = options.sort((a, b) => b.saving - a.saving)[0];
+      cache.set(key, { lines: options.map((o) => o.line), best: top ? { label: top.label, saving: top.saving } : null });
+    }
     return cache.get(key)!;
   };
-  const packagingCount = (filteredRows ?? []).filter((r) => packagingFor(r).length > 0).length;
+  const packagingCount = (filteredRows ?? []).filter((r) => packagingFor(r).best).length;
 
   const setOverride = (
     sku: string,
@@ -167,9 +182,10 @@ export default function DashboardTable() {
       </div>
 
       {packagingCount > 0 && (
-        <p className="mb-2 text-xs text-emerald-700">
-          {packagingCount} {packagingCount === 1 ? "SKU's" : "SKUs'"} FBA fee would drop with a box up to 2 cm
-          smaller on one or two sides. Look for “smaller box saves” under FBA fee and hover it for the exact cut.
+        <p className="mb-2 text-sm font-medium text-emerald-700">
+          {packagingCount} {packagingCount === 1 ? "SKU's" : "SKUs'"} FBA fee would drop with a small packaging
+          change: a box up to {CLOSE_CUT_CM} cm smaller on one or two sides, or up to {CLOSE_CUT_KG * 1000} g
+          lighter. Look for the green “saves” note under FBA fee and hover it for the exact change.
         </p>
       )}
       {schedule.peakEstimate && (
@@ -281,15 +297,14 @@ export default function DashboardTable() {
                     {m ? fmt$(m.fbaFee) : "—"}
                     {m?.peakEstimate && <span className="ml-1 font-sans text-xs text-amber-700">est.</span>}
                     {(() => {
-                      const options = m ? packagingFor(row) : [];
-                      if (!options.length) return null;
-                      const best = options[options.length - 1];
+                      const check = m ? packagingFor(row) : null;
+                      if (!check?.best) return null;
                       return (
                         <span
-                          className="block font-sans text-xs text-emerald-700 cursor-help"
-                          title={options.map(describeSaving).join("\n")}
+                          className="block font-sans text-xs font-semibold text-emerald-700 cursor-help"
+                          title={check.lines.join("\n")}
                         >
-                          smaller box saves ${best.savingPerUnit.toFixed(2)}
+                          {check.best.label} saves ${check.best.saving.toFixed(2)}
                         </span>
                       );
                     })()}

@@ -38,7 +38,16 @@ import { calculateCBMPerUnit, getCBMPerUnit, getCBFPerUnit } from "@platform/cal
 import { calculateShippingCosts, calculateShippingByStrategy } from "@platform/calc";
 import { calculateDimensionalWeight } from "@platform/calc";
 import { calculateTikTokReferralFee, calculateTikTokRefundAdminFee, calculateTikTokFees } from "@platform/calc";
-import { calculateReferralFee, computeAmazonFbaFees, findPackagingSavings } from '@platform/calc';
+import {
+  calculateReferralFee,
+  computeAmazonFbaFees,
+  feeWeightDriver,
+  findPackagingSavings,
+  findWeightSavings,
+} from '@platform/calc';
+
+/** How far the FBA fee check looks for a cheaper box. */
+const BOX_SEARCH_CM = { oneSide: 10, twoSides: 5 };
 import { useFeeSchedule } from '@/lib/fee-schedule';
 import SummaryBar from './SummaryBar';
 
@@ -265,11 +274,20 @@ const ProductCard = memo<ProductCardProps>(({
     regularFees: feeInput.hazmat ? computeAmazonFbaFees({ ...feeInput, hazmat: false }, feeSchedule) : null,
   }), [feeInput, feeSchedule]);
   const fees = amazonFees.fees;
-  // Would trimming the box (up to 2 cm, one or two sides) lower the FBA fee?
-  const packagingSavings = useMemo(
-    () => (showAmazonFBA ? findPackagingSavings(feeInput, feeSchedule) : []),
-    [feeInput, feeSchedule, showAmazonFBA],
-  );
+  // FBA fee check: the smallest weight or box change (any size within reach)
+  // that drops the unit to a cheaper tier or weight band.
+  const feeCheck = useMemo(() => {
+    if (!showAmazonFBA) return null;
+    return {
+      box: findPackagingSavings(feeInput, feeSchedule, {
+        maxReductionCm: BOX_SEARCH_CM.oneSide,
+        maxPairReductionCm: BOX_SEARCH_CM.twoSides,
+        pairStepCm: 0.2,
+      }),
+      weight: findWeightSavings(feeInput, feeSchedule),
+      driver: feeWeightDriver(feeInput, feeSchedule),
+    };
+  }, [feeInput, feeSchedule, showAmazonFBA]);
 
   const referralData = useMemo(() => (
     calculateReferralFee(product.category, product.sellingPrice ?? 0)
@@ -1243,13 +1261,21 @@ const ProductCard = memo<ProductCardProps>(({
                   </div>
                 </div>
               </div>
-              {/* Live FBA packaging check: flags a box just past a fee line as you type */}
-              {showAmazonFBA &&
+              {/* Live FBA fee check: flags a unit just past a fee line as you type */}
+              {feeCheck &&
                 (product.length ?? 0) > 0 &&
                 (product.width ?? 0) > 0 &&
                 (product.height ?? 0) > 0 &&
                 (product.weight ?? 0) > 0 && (
-                  <PackagingCheck savings={packagingSavings} scheduleLabel={feeSchedule.label} />
+                  <PackagingCheck
+                    fees={fees}
+                    driver={feeCheck.driver}
+                    unitWeightLb={(product.weight ?? 0) / 0.453592}
+                    boxSavings={feeCheck.box}
+                    weightSavings={feeCheck.weight}
+                    boxSearchCm={BOX_SEARCH_CM}
+                    scheduleLabel={feeSchedule.label}
+                  />
                 )}
             </CardContent>
           </Card>
@@ -3001,7 +3027,8 @@ const ProductCard = memo<ProductCardProps>(({
           fees={fees}
           regularFees={amazonFees.regularFees}
           scheduleNotes={feeSchedule.notes}
-          packagingSavings={packagingSavings}
+          packagingSavings={feeCheck?.box ?? []}
+          weightSavings={feeCheck?.weight ?? []}
         />
         </div>
 
