@@ -20,6 +20,13 @@ const RequireAuth: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [session, setSession] = useState<Session | null>(null);
   const [allowlist, setAllowlist] = useState<AllowlistState>({ kind: "idle" });
   const [retryNonce, setRetryNonce] = useState(0);
+  // Supabase can go quiet for minutes at a time; after a few seconds of
+  // waiting, say so instead of showing a blank page.
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setSlow(true), 8000);
+    return () => clearTimeout(t);
+  }, []);
 
   // True while we believe the URL is mid-auth (magic link / recovery / etc.)
   // Used for the loading UI so the user doesn't see a flash of "Sign In".
@@ -120,7 +127,22 @@ const RequireAuth: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     // Defer to avoid potential deadlock inside the auth callback.
     const t = setTimeout(async () => {
       try {
-        const { data, error } = await supabase.rpc("is_allowlisted_user");
+        // A request to a stalled Supabase never settles on its own; give up
+        // after 20 s so the user gets the Retry screen, not an endless wait.
+        const { data, error } = await Promise.race([
+          supabase.rpc("is_allowlisted_user"),
+          new Promise<never>((_, reject) =>
+            setTimeout(
+              () =>
+                reject(
+                  new Error(
+                    "The database (Supabase) didn't answer within 20 seconds. It usually comes back within a few minutes.",
+                  ),
+                ),
+              20000,
+            ),
+          ),
+        ]);
         if (cancelled) return;
         if (error) {
           setAllowlist({ kind: "error", message: error.message ?? "Allowlist check failed" });
@@ -165,7 +187,26 @@ const RequireAuth: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   }
 
   if (checkingAuth || (session && allowlist.kind === "loading")) {
-    return null;
+    return (
+      <main className="min-h-screen flex items-center justify-center p-4 bg-background">
+        <div className="max-w-sm text-center space-y-3">
+          <div className="text-sm font-medium">
+            {slow ? "Still connecting to the database…" : "Loading…"}
+          </div>
+          {slow && (
+            <>
+              <p className="text-xs text-muted-foreground">
+                The calculator&apos;s data lives in Supabase, which isn&apos;t answering yet. This
+                usually clears within a few minutes.
+              </p>
+              <Button size="sm" variant="outline" onClick={() => window.location.reload()}>
+                Try again
+              </Button>
+            </>
+          )}
+        </div>
+      </main>
+    );
   }
 
   if (session && allowlist.kind === "error") {
