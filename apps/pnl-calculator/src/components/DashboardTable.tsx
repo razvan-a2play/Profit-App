@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { findPackagingSavings, findWeightSavings } from "@platform/calc";
+import { findPackagingSavings, findSippOpportunity, findWeightSavings } from "@platform/calc";
 import {
   CLOSE_CUT_CM,
   CLOSE_CUT_KG,
+  describeGrow,
   describeSaving,
   describeWeightSaving,
 } from "@/lib/packaging-text";
@@ -87,7 +88,15 @@ export default function DashboardTable() {
     if (!cache.has(key)) {
       const box = findPackagingSavings(input, schedule, { maxReductionCm: CLOSE_CUT_CM });
       const weight = findWeightSavings(input, schedule, { maxReductionKg: CLOSE_CUT_KG });
+      const sipp = findSippOpportunity(input, schedule);
+      const sippOptions =
+        sipp.kind === "certify"
+          ? [{ label: "SIPP enrollment", saving: sipp.valuePerUnit, line: `Box qualifies for SIPP but isn't marked certified: enrolling saves $${sipp.valuePerUnit.toFixed(2)} per unit.` }]
+          : sipp.kind === "grow" && sipp.grow.reduce((t, g) => t + g.byCm, 0) <= CLOSE_CUT_CM
+            ? [{ label: "SIPP-size box", saving: sipp.savingPerUnit, line: `Make the ${describeGrow(sipp.grow)} to qualify for SIPP: saves $${sipp.savingPerUnit.toFixed(2)} per unit, net.` }]
+            : [];
       const options = [
+        ...sippOptions,
         ...weight.map((w) => ({ label: `${Math.round(w.byKg * 1000)} g lighter`, saving: w.savingPerUnit, line: describeWeightSaving(w) })),
         ...box.map((s) => ({ label: "smaller box", saving: s.savingPerUnit, line: describeSaving(s) })),
       ];
@@ -184,8 +193,9 @@ export default function DashboardTable() {
       {packagingCount > 0 && (
         <p className="mb-2 text-sm font-medium text-emerald-700">
           {packagingCount} {packagingCount === 1 ? "SKU's" : "SKUs'"} FBA fee would drop with a small packaging
-          change: a box up to {CLOSE_CUT_CM} cm smaller on one or two sides, or up to {CLOSE_CUT_KG * 1000} g
-          lighter. Look for the green “saves” note under FBA fee and hover it for the exact change.
+          change: a box up to {CLOSE_CUT_CM} cm smaller on one or two sides, up to {CLOSE_CUT_KG * 1000} g
+          lighter, or a SIPP enrollment. Look for the green “saves” note under FBA fee and hover it for the
+          exact change.
         </p>
       )}
       {schedule.peakEstimate && (

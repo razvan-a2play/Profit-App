@@ -7,9 +7,10 @@ import {
   PRICE_BAND_LABEL,
   type AmazonFbaFeeBreakdown,
   type PackagingSaving,
+  type SippOpportunity,
   type WeightSaving,
 } from "@platform/calc";
-import { describeCuts, describeWeightCut } from "@/lib/packaging-text";
+import { describeCuts, describeGrow, describeWeightCut } from "@/lib/packaging-text";
 
 interface FBACalculationProps {
   length: number;
@@ -30,6 +31,8 @@ interface FBACalculationProps {
   packagingSavings?: PackagingSaving[];
   /** Weight reductions that lower the FBA fee. */
   weightSavings?: WeightSaving[];
+  /** What SIPP is worth for this unit and how to get it. */
+  sipp?: SippOpportunity | null;
 }
 
 const $ = (n: number) => `$${n.toFixed(2)}`;
@@ -49,9 +52,15 @@ const FBACalculation: React.FC<FBACalculationProps> = ({
   scheduleNotes = [],
   packagingSavings = [],
   weightSavings = [],
+  sipp = null,
 }) => {
   // The single easiest change that saves, for the one-line pointer below.
   const firstChange = [
+    ...(sipp?.kind === "certify"
+      ? [{ text: "enrolling it in SIPP", saving: sipp.valuePerUnit, size: 0 }]
+      : sipp?.kind === "grow"
+        ? [{ text: `growing the box to qualify for SIPP (${describeGrow(sipp.grow)})`, saving: sipp.savingPerUnit, size: sipp.grow.reduce((t, g) => t + g.byCm, 0) }]
+        : []),
     ...weightSavings.map((w) => ({ text: describeWeightCut(w), saving: w.savingPerUnit, size: w.byKg * 20 })),
     ...packagingSavings.map((s) => ({ text: describeCuts(s).replace(/^Trim/, "trimming"), saving: s.savingPerUnit, size: s.totalCutCm })),
   ].sort((a, b) => a.size - b.size)[0];
@@ -133,7 +142,9 @@ const FBACalculation: React.FC<FBACalculationProps> = ({
                     onChange={(e) => onSippOverrideChange(e.target.checked)}
                     className="w-4 h-4 text-primary accent-primary"
                   />
-                  <span className="text-sm text-gray-600">Passed (Eligible)</span>
+                  <span className="text-sm text-gray-600" title="Ticked: the P&L takes Amazon's SIPP discount (or, for bulky, skips the packaging fee). Untick if this product isn't enrolled in SIPP.">
+                    Certified in SIPP
+                  </span>
                 </label>
               )}
             </div>
@@ -174,7 +185,7 @@ const FBACalculation: React.FC<FBACalculationProps> = ({
                 </div>
               )}
               {sippEligible === "YES" && !sippEligibleOverride && (
-                <div className="mt-1 text-amber-600">Manually marked as ineligible (e.g., fragile)</div>
+                <div className="mt-1 text-amber-600">Marked as not certified in SIPP: the P&amp;L uses the fee without the SIPP discount</div>
               )}
             </div>
           </div>

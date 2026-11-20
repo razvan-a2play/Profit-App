@@ -43,6 +43,7 @@ import {
   computeAmazonFbaFees,
   feeWeightDriver,
   findPackagingSavings,
+  findSippOpportunity,
   findWeightSavings,
 } from '@platform/calc';
 
@@ -286,6 +287,7 @@ const ProductCard = memo<ProductCardProps>(({
       }),
       weight: findWeightSavings(feeInput, feeSchedule),
       driver: feeWeightDriver(feeInput, feeSchedule),
+      sipp: findSippOpportunity(feeInput, feeSchedule),
     };
   }, [feeInput, feeSchedule, showAmazonFBA]);
 
@@ -1273,6 +1275,7 @@ const ProductCard = memo<ProductCardProps>(({
                     unitWeightLb={(product.weight ?? 0) / 0.453592}
                     boxSavings={feeCheck.box}
                     weightSavings={feeCheck.weight}
+                    sipp={feeCheck.sipp}
                     boxSearchCm={BOX_SEARCH_CM}
                     scheduleLabel={feeSchedule.label}
                   />
@@ -3029,6 +3032,7 @@ const ProductCard = memo<ProductCardProps>(({
           scheduleNotes={feeSchedule.notes}
           packagingSavings={feeCheck?.box ?? []}
           weightSavings={feeCheck?.weight ?? []}
+          sipp={feeCheck?.sipp ?? null}
         />
         </div>
 

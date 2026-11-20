@@ -54,3 +54,8 @@ export function describeSaving(s: PackagingSaving): string {
 export function describeWeightSaving(w: WeightSaving): string {
   return `${describeWeightCut(w)}: ${describeEffect(w)}. ${feeChange(w)}`;
 }
+
+/** "width 7.8 → 10.3 cm (+2.5 cm)" for the box growth that qualifies for SIPP. */
+export function describeGrow(grow: Array<{ side: string; fromCm: number; toCm: number; byCm: number }>): string {
+  return grow.map((g) => `${SIDE[g.side] ?? g.side} ${cm(g.fromCm)} → ${cm(g.toCm)} (+${cm(g.byCm)})`).join(" and ");
+}

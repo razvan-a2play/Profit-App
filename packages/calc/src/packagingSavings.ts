@@ -211,3 +211,74 @@ export function feeWeightDriver(input: AmazonFbaFeeInput, schedule: FeeSchedule)
   const unitLb = (input.weight || 0) / 0.453592;
   return f.fba.weightBasis === "Unit weight" || unitLb >= f.dimWeight ? "actual weight" : "box size";
 }
+
+// ---------------------------------------------------------------------------
+// SIPP (Ships in Product Packaging): a certified unit gets a per-unit discount
+// (standard size) or skips the packaging fee (bulky). The box qualifies only
+// if it is more than 6 x 4 x 0.375 in (sorted sides).
+// ---------------------------------------------------------------------------
+
+/** SIPP minimums, inches, for the longest / median / shortest side (must be exceeded). */
+export const SIPP_MIN_IN = [6, 4, 0.375] as const;
+
+export interface BoxGrow {
+  side: BoxSide;
+  fromCm: number;
+  toCm: number;
+  byCm: number;
+}
+
+export type SippOpportunity =
+  /** Box qualifies and the product is marked certified: the P&L counts the benefit. */
+  | { kind: "counted"; valuePerUnit: number }
+  /** Box qualifies but the product isn't marked certified: certifying saves this. */
+  | { kind: "certify"; valuePerUnit: number }
+  /** Box too small; growing these sides qualifies it and still saves, net. */
+  | { kind: "grow"; grow: BoxGrow[]; savingPerUnit: number; feeAfter: number }
+  /** Box too small; growing it to qualify costs more than SIPP saves. */
+  | { kind: "not-worth"; grow: BoxGrow[]; extraCostPerUnit: number }
+  /** Nothing to gain (dangerous goods, no fee, or no SIPP rate for this tier). */
+  | { kind: "none"; reason: "hazmat" | "no-fee" | "no-benefit" };
+
+const r1up = (cm: number) => Math.ceil(cm * 10 - 1e-9) / 10;
+
+/**
+ * What SIPP is worth for this unit, and how to get it. Growth targets sit a
+ * millimetre past Amazon's minimum (rounded up to 0.1 cm) so the box clearly
+ * qualifies.
+ */
+export function findSippOpportunity(input: AmazonFbaFeeInput, schedule: FeeSchedule): SippOpportunity {
+  const asIs = computeAmazonFbaFees(input, schedule);
+  if (!(asIs.fbaWeighted > 0)) return { kind: "none", reason: "no-fee" };
+  if (input.hazmat) return { kind: "none", reason: "hazmat" };
+
+  const certified = computeAmazonFbaFees({ ...input, sippEligibleOverride: true }, schedule);
+  if (certified.sippCertified) {
+    const notCertified = computeAmazonFbaFees({ ...input, sippEligibleOverride: false }, schedule);
+    const value = notCertified.fbaWeighted - certified.fbaWeighted;
+    if (value < 0.005) return { kind: "none", reason: "no-benefit" };
+    return input.sippEligibleOverride === false
+      ? { kind: "certify", valuePerUnit: value }
+      : { kind: "counted", valuePerUnit: value };
+  }
+
+  // Too small to qualify: grow each short side just past its minimum.
+  const sides = (["length", "width", "height"] as BoxSide[])
+    .map((side) => ({ side, cm: input[side] || 0 }))
+    .sort((a, b) => b.cm - a.cm);
+  const grow: BoxGrow[] = [];
+  const next: AmazonFbaFeeInput = { ...input, sippEligibleOverride: true };
+  sides.forEach(({ side, cm }, i) => {
+    const needCm = r1up((SIPP_MIN_IN[i] + 0.04) * 2.54);
+    if (cm / 2.54 <= SIPP_MIN_IN[i]) {
+      next[side] = needCm;
+      grow.push({ side, fromCm: cm, toCm: needCm, byCm: Math.round((needCm - cm) * 100) / 100 });
+    }
+  });
+  const grown = computeAmazonFbaFees(next, schedule);
+  if (!grown.sippCertified) return { kind: "none", reason: "no-benefit" };
+  const saving = asIs.fbaWeighted - grown.fbaWeighted;
+  return saving >= 0.005
+    ? { kind: "grow", grow, savingPerUnit: saving, feeAfter: grown.fbaWeighted }
+    : { kind: "not-worth", grow, extraCostPerUnit: -saving };
+}

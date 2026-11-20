@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { feeWeightDriver, findPackagingSavings, findWeightSavings } from "./packagingSavings";
+import { feeWeightDriver, findPackagingSavings, findSippOpportunity, findWeightSavings } from "./packagingSavings";
 import { US_2026, US_2027 } from "./feeSchedules";
 
 describe("findPackagingSavings", () => {
@@ -93,5 +93,64 @@ describe("findWeightSavings", () => {
     const t0 = performance.now();
     for (let i = 0; i < 10; i++) findPackagingSavings(box, US_2027, { maxReductionCm: 10, maxPairReductionCm: 5, pairStepCm: 0.2 });
     console.log(`wide search x10: ${(performance.now() - t0).toFixed(0)} ms`);
+  });
+});
+
+describe("findSippOpportunity", () => {
+  // SEZ0101011: 23.5 x 20.5 x 5.5 cm qualifies (9.25 x 8.07 x 2.17 in).
+  const pad = { length: 23.5, width: 20.5, height: 5.5, weight: 1.57, sellingPrice: 20, category: "toys and games" };
+
+  it("counts the discount when the box qualifies and is marked certified", () => {
+    const o = findSippOpportunity(pad, US_2026);
+    expect(o.kind).toBe("counted");
+    if (o.kind === "counted") expect(o.valuePerUnit).toBeCloseTo(0.23, 3);
+  });
+
+  it("flags certifying when the box qualifies but isn't marked certified", () => {
+    const o = findSippOpportunity({ ...pad, sippEligibleOverride: false }, US_2026);
+    expect(o.kind).toBe("certify");
+    if (o.kind === "certify") expect(o.valuePerUnit).toBeCloseTo(0.23, 3);
+  });
+
+  it("finds the box growth that qualifies the Beetle Brush, and its net saving", () => {
+    // Median side 4.3 cm... sorted 17.1 / 7.8 / 4.3: 7.8 cm = 3.07 in < 4 in.
+    const brush = { length: 7.8, width: 4.3, height: 17.1, weight: 0.109, sellingPrice: 7.99, category: "baby products" };
+    const o = findSippOpportunity(brush, US_2026);
+    expect(o.kind).toBe("grow");
+    if (o.kind === "grow") {
+      expect(o.grow).toEqual([{ side: "length", fromCm: 7.8, toCm: 10.3, byCm: 2.5 }]);
+      // Same 4-8 oz band either way, so the net saving is the $0.04 discount.
+      expect(o.savingPerUnit).toBeCloseTo(0.04, 3);
+    }
+  });
+
+  it("says when growing to qualify costs more than SIPP saves", () => {
+    // 21 x 9.9 x 5.4 cm, 50 g: dimensional weight 7.90 oz (4-8 oz band).
+    // Widening 9.9 -> 10.3 cm to qualify pushes it to 8.2 oz (8-12 oz band):
+    // +$0.25 fee against a $0.07 discount.
+    const box = { length: 21, width: 9.9, height: 5.4, weight: 0.05, sellingPrice: 25, category: "toys and games" };
+    const o = findSippOpportunity(box, US_2026);
+    expect(o.kind).toBe("not-worth");
+    if (o.kind === "not-worth") expect(o.extraCostPerUnit).toBeGreaterThan(0.1);
+  });
+
+  it("a thin card that can grow and stay small standard does qualify for a saving", () => {
+    // 16 x 8 x 0.5 cm, 16 g: widen to 10.3 cm and thicken to 1.1 cm, still
+    // under 0.75 in thick, so the $0.04 small-standard discount is net.
+    const card = { length: 16, width: 8, height: 0.5, weight: 0.0156, sellingPrice: 25, category: "toys and games" };
+    const o = findSippOpportunity(card, US_2026);
+    expect(o.kind).toBe("grow");
+    if (o.kind === "grow") expect(o.savingPerUnit).toBeCloseTo(0.04, 3);
+  });
+
+  it("values certification of a bulky unit as the packaging fee it avoids", () => {
+    const bulky = { length: 60, width: 40, height: 30, weight: 6, sellingPrice: 40, category: "toys and games", sippEligibleOverride: false };
+    const o = findSippOpportunity(bulky, US_2027);
+    expect(o.kind).toBe("certify");
+    if (o.kind === "certify") expect(o.valuePerUnit).toBeCloseTo(3.6, 2);
+  });
+
+  it("no SIPP for dangerous goods", () => {
+    expect(findSippOpportunity({ ...pad, hazmat: true }, US_2026)).toEqual({ kind: "none", reason: "hazmat" });
   });
 });
