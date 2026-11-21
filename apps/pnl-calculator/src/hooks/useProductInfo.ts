@@ -1,23 +1,12 @@
 import { useState, useEffect } from 'react';
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@platform/ui";
+import { mergeLibraryProducts, type ProductInfoLike } from "@/lib/product-library";
+import { fetchLibraryProducts } from "@/lib/product-library-client";
 
-interface ProductInfo {
-  SKU: string;
-  'Product Name': string | null;
-  Category: string | null;
-  Supplier: string | null;
-  'Units/carton': number | null;
-  'Product box Length': string | null;
-  'Product box Width': number | null;
-  'Product box Height': number | null;
-  'Product box weight (kg)': number | null;
-  'Carton Width': number | null;
-  'Carton Height': number | null;
-  'Carton weight': number | null;
-  'Carton Length': string | null;
-  ASIN: string | null;
-}
+// The P&L's own `Product Information` rows plus every non-archived Product
+// Library product that table lacks.
+type ProductInfo = ProductInfoLike;
 
 export const useProductInfo = () => {
   const [productInfoList, setProductInfoList] = useState<ProductInfo[]>([]);
@@ -30,10 +19,16 @@ export const useProductInfo = () => {
       console.log('Loading product info from Supabase...');
       
       // Use exact column names from the database
-      const { data, error } = await supabase
-        .from('Product Information')
-        .select('SKU, "Product Name", Category, Supplier, "Units/carton", "Product box Length", "Product box Width", "Product box Height", "Product box weight (kg)", "Carton Width", "Carton Height", "Carton weight", "Carton Length", ASIN')
-        .order('SKU', { ascending: true });
+      const [{ data, error }, library] = await Promise.all([
+        supabase
+          .from('Product Information')
+          .select('SKU, "Product Name", Category, Supplier, "Units/carton", "Product box Length", "Product box Width", "Product box Height", "Product box weight (kg)", "Carton Width", "Carton Height", "Carton weight", "Carton Length", ASIN')
+          .order('SKU', { ascending: true }),
+        fetchLibraryProducts(),
+      ]);
+      if (library.state !== 'ok') {
+        console.warn('Product Library not included:', library.state === 'error' ? library.message : 'not configured');
+      }
 
       console.log('Supabase response:', { data, error });
 
@@ -43,8 +38,11 @@ export const useProductInfo = () => {
       }
 
       if (data && Array.isArray(data)) {
-        console.log(`Loaded ${data.length} products from Supabase`);
-        setProductInfoList(data as unknown as ProductInfo[]);
+        const rows = data as unknown as ProductInfo[];
+        const merged = library.state === 'ok' ? mergeLibraryProducts(rows, library.products).rows : rows;
+        merged.sort((a, b) => String(a.SKU).localeCompare(String(b.SKU)));
+        console.log(`Loaded ${merged.length} products (${rows.length} from Product Information)`);
+        setProductInfoList(merged);
       } else {
         console.log('No data returned from Supabase');
         setProductInfoList([]);

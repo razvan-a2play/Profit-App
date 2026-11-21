@@ -1,5 +1,6 @@
 /**
- * Loads every SKU in `Product Information` and left-joins the latest saved
+ * Loads every SKU in `Product Information` plus every non-archived Product
+ * Library product that table lacks, and left-joins the latest saved
  * snapshot from `product_versions`. Prefers a `bucket='live'` snapshot; falls
  * back to the newest `bucket='rd'` snapshot; if neither exists, the row still
  * appears so the user can see "known SKU, nothing costed yet".
@@ -8,6 +9,8 @@
  */
 import { supabase } from "@/lib/supabase";
 import type { Product } from "@/types/product";
+import { mergeLibraryProducts, type ProductInfoLike } from "@/lib/product-library";
+import { fetchLibraryProducts } from "@/lib/product-library-client";
 
 export type VersionStatus = "live" | "rd" | "h10-only" | "none";
 
@@ -36,6 +39,19 @@ export interface DashboardRow {
   versionData: Product | null;
   /** Helium10 Profits snapshot — null when no row in helium10_cogs. */
   helium10: Helium10Cogs | null;
+  /** Product Library status (draft / ready); null when not in the Library. */
+  libraryStatus: string | null;
+}
+
+/** Where the product list came from, for the line above the table. */
+export type LibrarySource =
+  | { state: "ok"; libraryCount: number; added: number }
+  | { state: "not-configured" }
+  | { state: "error"; message: string };
+
+export interface DashboardLoad {
+  rows: DashboardRow[];
+  library: LibrarySource;
 }
 
 interface RawVersion {
@@ -46,22 +62,7 @@ interface RawVersion {
   version_data: Product & Record<string, unknown>;
 }
 
-interface RawProductInfoRow {
-  ASIN: string | null;
-  SKU: string;
-  "Product Name": string | null;
-  Supplier: string | null;
-  Category: string | null;
-  "Product box Length": string | number | null;
-  "Product box Width": number | null;
-  "Product box Height": number | null;
-  "Product box weight (kg)": number | null;
-  "Carton Length": string | number | null;
-  "Carton Width": number | null;
-  "Carton Height": number | null;
-  "Carton weight": number | null;
-  "Units/carton": number | null;
-}
+type RawProductInfoRow = ProductInfoLike;
 
 interface RawHelium10Row {
   sku: string;
@@ -82,9 +83,10 @@ function num(v: string | number | null | undefined): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-export async function loadDashboardRows(): Promise<DashboardRow[]> {
-  // Fetch Product Information + all non-deleted versions + helium10 COGS in parallel.
-  const [infoRes, verRes, h10Res] = await Promise.all([
+export async function loadDashboardRows(): Promise<DashboardLoad> {
+  // Fetch Product Information + all non-deleted versions + helium10 COGS +
+  // the Product Library in parallel.
+  const [infoRes, verRes, h10Res, libraryLoad] = await Promise.all([
     supabase
       .from("Product Information")
       .select(
@@ -102,6 +104,7 @@ export async function loadDashboardRows(): Promise<DashboardRow[]> {
       .select(
         "sku, asin, product_cost, shipping_cost, tariffs, total_cogs, currency, starts_at, ends_at, fetched_at",
       ),
+    fetchLibraryProducts(),
   ]);
 
   if (infoRes.error) throw new Error(`Load Product Information failed: ${infoRes.error.message}`);
@@ -121,7 +124,17 @@ export async function loadDashboardRows(): Promise<DashboardRow[]> {
     else if (row.bucket === "rd" && !latestRd.has(sku)) latestRd.set(sku, row);
   }
 
-  const infoRows = (infoRes.data ?? []) as RawProductInfoRow[];
+  // The P&L table's rows as they are, plus each Library product it lacks.
+  const pnlInfoRows = (infoRes.data ?? []) as unknown as RawProductInfoRow[];
+  let infoRows: RawProductInfoRow[] = pnlInfoRows;
+  let library: LibrarySource;
+  if (libraryLoad.state === "ok") {
+    const merged = mergeLibraryProducts(pnlInfoRows, libraryLoad.products);
+    infoRows = merged.rows;
+    library = { state: "ok", libraryCount: libraryLoad.products.length, added: merged.added.length };
+  } else {
+    library = libraryLoad;
+  }
 
   // Also include any SKUs that have a saved version but aren't in Product
   // Information (so nothing silently disappears from the earlier V1 view).
@@ -155,7 +168,7 @@ export async function loadDashboardRows(): Promise<DashboardRow[]> {
     return a.productName.localeCompare(b.productName);
   });
 
-  return rows;
+  return { rows, library };
 }
 
 type FeeTemplate = Partial<Product>;
@@ -280,8 +293,8 @@ function synthesizeFromH10(
     userManualCostVisible: true,
     notes: "",
     sippEligibleOverride: true,
-    hazmat: false,
-    containsBatteries: false,
+    hazmat: info?.hazmat ?? false,
+    containsBatteries: info?.containsBatteries ?? false,
     savedVersions: [],
   };
 }
@@ -333,5 +346,6 @@ function buildRow(
           fetchedAt: h10.fetched_at,
         }
       : null,
+    libraryStatus: info?.libraryStatus ?? null,
   };
 }

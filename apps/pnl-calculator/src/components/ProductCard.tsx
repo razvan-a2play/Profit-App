@@ -535,7 +535,11 @@ const ProductCard = memo<ProductCardProps>(({
       if (productInfo['Carton weight'] && productInfo['Carton weight'] !== null && productInfo['Carton weight'] > 0) {
         updates.masterCartonWeight = productInfo['Carton weight'];
       }
-      
+
+      // Dangerous goods, as the Product Library records them.
+      if (productInfo.hazmat) updates.hazmat = true;
+      if (productInfo.containsBatteries) updates.containsBatteries = true;
+
       // Apply all updates at once
       batchUpdateProduct(product.id, updates);
       

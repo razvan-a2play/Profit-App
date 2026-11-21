@@ -11,7 +11,12 @@ import {
 } from "@/lib/packaging-text";
 import Link from "next/link";
 import { Button, Input, useToast } from "@platform/ui";
-import { loadDashboardRows, type DashboardRow, type VersionStatus } from "@/lib/dashboard-data";
+import {
+  loadDashboardRows,
+  type DashboardRow,
+  type LibrarySource,
+  type VersionStatus,
+} from "@/lib/dashboard-data";
 import { computeMetrics, fbaInputFor } from "@/lib/dashboard-calc";
 import { useFeeSchedule } from "@/lib/fee-schedule";
 
@@ -25,16 +30,19 @@ export default function DashboardTable() {
   const { toast } = useToast();
   const { schedule } = useFeeSchedule();
   const [rows, setRows] = useState<DashboardRow[] | null>(null);
+  const [library, setLibrary] = useState<LibrarySource | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [overrides, setOverrides] = useState<Overrides>({});
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("withVersion");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
 
   useEffect(() => {
     let cancelled = false;
     loadDashboardRows()
       .then((r) => {
-        if (!cancelled) setRows(r);
+        if (cancelled) return;
+        setRows(r.rows);
+        setLibrary(r.library);
       })
       .catch((e) => {
         if (!cancelled) setError(e.message ?? String(e));
@@ -140,8 +148,7 @@ export default function DashboardTable() {
     return (
       <div className="p-8">
         <p className="text-muted-foreground">
-          No SKUs found. Add rows to <code>Product Information</code> or save a version in the
-          calculator.
+          No SKUs found. Add products in the Product Library or save a version in the calculator.
         </p>
       </div>
     );
@@ -196,6 +203,22 @@ export default function DashboardTable() {
           </Link>
         </div>
       </div>
+
+      {library?.state === "ok" && (
+        <p className="mb-2 text-xs text-muted-foreground">
+          Includes all {library.libraryCount} Product Library products (archived ones left out)
+          {library.added > 0
+            ? `; ${library.added} of them aren't in the P&L's own product table and show as Not costed until you cost them in the calculator.`
+            : "."}
+        </p>
+      )}
+      {library && library.state !== "ok" && (
+        <p className="mb-2 text-sm font-medium text-amber-700">
+          {library.state === "not-configured"
+            ? "The Product Library isn't connected on this server, so products that are only in the Library are missing. Add PRODUCT_LIBRARY_SUPABASE_URL and PRODUCT_LIBRARY_SUPABASE_KEY to the app's Railway variables."
+            : `Couldn't read the Product Library (${library.message}), so products that are only in the Library are missing. Reload to try again.`}
+        </p>
+      )}
 
       {packagingCount > 0 && (
         <p className="mb-2 text-sm font-medium text-emerald-700">
@@ -263,13 +286,17 @@ export default function DashboardTable() {
                     <div className="font-medium truncate" title={row.productName}>
                       {row.productName}
                     </div>
-                    {row.supplier && (
+                    {row.supplier ? (
                       <div
                         className="text-xs text-muted-foreground truncate"
                         title={row.supplier}
                       >
                         {row.supplier}
                       </div>
+                    ) : (
+                      row.libraryStatus && (
+                        <div className="text-xs text-muted-foreground">Product Library · {row.libraryStatus}</div>
+                      )
                     )}
                   </Td>
                   <Td className="font-mono text-xs">{row.asin ?? "—"}</Td>
@@ -381,8 +408,8 @@ export default function DashboardTable() {
         Dashboard edits are a <strong>local what-if</strong> — they never touch saved snapshots.
         Status: <StatusBadge status="live" inline /> uses the latest live snapshot ·{" "}
         <StatusBadge status="rd" inline /> no live yet, R&amp;D plan shown ·{" "}
-        <StatusBadge status="h10-only" inline /> no app version; row synthesised from Helium10 COGS + Product Information dimensions + default fees — type a desired price to see margin ·{" "}
-        <StatusBadge status="none" inline /> no cost data anywhere yet.
+        <StatusBadge status="h10-only" inline /> no app version; row synthesised from Helium10 COGS + the product's box dimensions + default fees — type a desired price to see margin ·{" "}
+        <StatusBadge status="none" inline /> no cost data anywhere yet: pick the SKU in the calculator to cost it.
         Margin colour: <span className="text-success">≥25%</span> ·{" "}
         <span className="text-warning">15–25%</span> ·{" "}
         <span className="text-destructive">&lt;15%</span>
