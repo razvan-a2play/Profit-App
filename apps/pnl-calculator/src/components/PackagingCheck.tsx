@@ -64,7 +64,9 @@ function SippLine({ sipp, bulky }: { sipp: SippOpportunity; bulky: boolean }) {
           </span>
           {small && <span className="ml-2 text-xs font-semibold text-emerald-700">small change</span>}
           <span className="block text-xs text-gray-600">
-            Net of any higher fee for the bigger box; it then has to be enrolled in SIPP.
+            Net of the bigger box&apos;s FBA fee, freight and storage ($
+            {sipp.boxCostPerUnit.toFixed(2)} per unit for freight and storage). It then has to be
+            enrolled in SIPP.
           </span>
         </p>
       );
@@ -73,7 +75,8 @@ function SippLine({ sipp, bulky }: { sipp: SippOpportunity; bulky: boolean }) {
       return (
         <p className="text-sm text-gray-700">
           Too small for SIPP (the box must be over 6 × 4 × 0.375 in). Making the {describeGrow(sipp.grow)} would
-          qualify it, but the bigger box costs ${sipp.extraCostPerUnit.toFixed(2)} more per unit than SIPP saves.
+          qualify it, but the bigger box&apos;s FBA fee, freight and storage cost $
+          {sipp.extraCostPerUnit.toFixed(2)} more per unit than SIPP saves.
         </p>
       );
     case "none":

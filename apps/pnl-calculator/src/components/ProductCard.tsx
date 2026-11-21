@@ -287,9 +287,16 @@ const ProductCard = memo<ProductCardProps>(({
       }),
       weight: findWeightSavings(feeInput, feeSchedule),
       driver: feeWeightDriver(feeInput, feeSchedule),
-      sipp: findSippOpportunity(feeInput, feeSchedule),
+      // A bigger SIPP-size box also costs freight and storage: use this
+      // product's own rates so the net saving is real.
+      sipp: findSippOpportunity(feeInput, feeSchedule, {
+        freightPerCbm: product.cbmCost ?? 0,
+        storagePerCuftMonth:
+          ((product.amazonFBAStorageFeeNonPeak ?? 0) * 9 + (product.amazonFBAStorageFeePeak ?? 0) * 3) / 12,
+        storageMonths: product.storageMonths ?? 1,
+      }),
     };
-  }, [feeInput, feeSchedule, showAmazonFBA]);
+  }, [feeInput, feeSchedule, showAmazonFBA, product.cbmCost, product.amazonFBAStorageFeeNonPeak, product.amazonFBAStorageFeePeak, product.storageMonths]);
 
   const referralData = useMemo(() => (
     calculateReferralFee(product.category, product.sellingPrice ?? 0)

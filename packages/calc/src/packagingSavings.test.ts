@@ -154,3 +154,23 @@ describe("findSippOpportunity", () => {
     expect(findSippOpportunity({ ...pad, hazmat: true }, US_2026)).toEqual({ kind: "none", reason: "hazmat" });
   });
 });
+
+describe("SIPP box growth pays for its freight and storage", () => {
+  // SPBATH0027 live snapshot: 15 x 9 x 6.1 cm, 143 g, $9.99. Amazon's SIPP
+  // report: excluded, "Package size is below 6 x 4 x 0.375 inches".
+  const army = { length: 15, width: 9, height: 6.1, weight: 0.1432, sellingPrice: 9.99, category: "toys and games" };
+  // P&L defaults: $240 per CBM freight, $1.185/cu ft/month blended storage, 1 month.
+  const costs = { freightPerCbm: 240, storagePerCuftMonth: 1.185, storageMonths: 1 };
+
+  it("fee alone: growing to 15.3 x 10.3 cm saves the $0.04 SIPP discount", () => {
+    const o = findSippOpportunity(army, US_2026);
+    expect(o.kind).toBe("grow");
+    if (o.kind === "grow") expect(o.savingPerUnit).toBeCloseTo(0.04, 3);
+  });
+
+  it("with the bigger box's freight and storage it isn't worth it", () => {
+    const o = findSippOpportunity(army, US_2026, costs);
+    expect(o.kind).toBe("not-worth");
+    if (o.kind === "not-worth") expect(o.boxCostPerUnit).toBeGreaterThan(0.035);
+  });
+});

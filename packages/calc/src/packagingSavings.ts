@@ -233,21 +233,41 @@ export type SippOpportunity =
   | { kind: "counted"; valuePerUnit: number }
   /** Box qualifies but the product isn't marked certified: certifying saves this. */
   | { kind: "certify"; valuePerUnit: number }
-  /** Box too small; growing these sides qualifies it and still saves, net. */
-  | { kind: "grow"; grow: BoxGrow[]; savingPerUnit: number; feeAfter: number }
+  /**
+   * Box too small; growing these sides qualifies it and still saves, net of
+   * the higher FBA fee and the bigger box's freight and storage (boxCostPerUnit).
+   */
+  | { kind: "grow"; grow: BoxGrow[]; savingPerUnit: number; feeAfter: number; boxCostPerUnit: number }
   /** Box too small; growing it to qualify costs more than SIPP saves. */
-  | { kind: "not-worth"; grow: BoxGrow[]; extraCostPerUnit: number }
+  | { kind: "not-worth"; grow: BoxGrow[]; extraCostPerUnit: number; boxCostPerUnit: number }
   /** Nothing to gain (dangerous goods, no fee, or no SIPP rate for this tier). */
   | { kind: "none"; reason: "hazmat" | "no-fee" | "no-benefit" };
 
 const r1up = (cm: number) => Math.ceil(cm * 10 - 1e-9) / 10;
 
 /**
+ * What a bigger box costs per unit beyond the FBA fee: inbound freight by
+ * volume and FBA storage. Use the product's own settings.
+ */
+export interface BoxVolumeCost {
+  /** Freight to Amazon, $ per cubic metre (the P&L's "CBM cost"). */
+  freightPerCbm: number;
+  /** FBA storage, $ per cubic foot per month (the P&L's blended rate). */
+  storagePerCuftMonth: number;
+  storageMonths: number;
+}
+
+/**
  * What SIPP is worth for this unit, and how to get it. Growth targets sit a
  * millimetre past Amazon's minimum (rounded up to 0.1 cm) so the box clearly
  * qualifies.
  */
-export function findSippOpportunity(input: AmazonFbaFeeInput, schedule: FeeSchedule): SippOpportunity {
+export function findSippOpportunity(
+  input: AmazonFbaFeeInput,
+  schedule: FeeSchedule,
+  /** Product's freight and storage rates; without them a bigger box looks free. */
+  volumeCost?: BoxVolumeCost,
+): SippOpportunity {
   const asIs = computeAmazonFbaFees(input, schedule);
   if (!(asIs.fbaWeighted > 0)) return { kind: "none", reason: "no-fee" };
   if (input.hazmat) return { kind: "none", reason: "hazmat" };
@@ -277,8 +297,15 @@ export function findSippOpportunity(input: AmazonFbaFeeInput, schedule: FeeSched
   });
   const grown = computeAmazonFbaFees(next, schedule);
   if (!grown.sippCertified) return { kind: "none", reason: "no-benefit" };
-  const saving = asIs.fbaWeighted - grown.fbaWeighted;
+  // The bigger box ships and stores more air: charge that against the saving.
+  const vol = (d: AmazonFbaFeeInput) => (d.length || 0) * (d.width || 0) * (d.height || 0);
+  const addedCm3 = Math.max(0, vol(next) - vol(input));
+  const boxCostPerUnit = volumeCost
+    ? (addedCm3 / 1e6) * volumeCost.freightPerCbm +
+      (addedCm3 / 28316.85) * volumeCost.storagePerCuftMonth * volumeCost.storageMonths
+    : 0;
+  const saving = asIs.fbaWeighted - grown.fbaWeighted - boxCostPerUnit;
   return saving >= 0.005
-    ? { kind: "grow", grow, savingPerUnit: saving, feeAfter: grown.fbaWeighted }
-    : { kind: "not-worth", grow, extraCostPerUnit: -saving };
+    ? { kind: "grow", grow, savingPerUnit: saving, feeAfter: grown.fbaWeighted, boxCostPerUnit }
+    : { kind: "not-worth", grow, extraCostPerUnit: -saving, boxCostPerUnit };
 }

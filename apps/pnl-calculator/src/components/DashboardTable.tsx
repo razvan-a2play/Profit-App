@@ -88,7 +88,14 @@ export default function DashboardTable() {
     if (!cache.has(key)) {
       const box = findPackagingSavings(input, schedule, { maxReductionCm: CLOSE_CUT_CM });
       const weight = findWeightSavings(input, schedule, { maxReductionKg: CLOSE_CUT_KG });
-      const sipp = findSippOpportunity(input, schedule);
+      const p = r.versionData;
+      const sipp = findSippOpportunity(input, schedule, {
+        freightPerCbm: p.cbmCost ?? 0,
+        storagePerCuftMonth:
+          p.amazonFBAAVGFee ??
+          ((p.amazonFBAStorageFeeNonPeak ?? 0) * 9 + (p.amazonFBAStorageFeePeak ?? 0) * 3) / 12,
+        storageMonths: p.storageMonths ?? 1,
+      });
       const sippOptions =
         sipp.kind === "certify"
           ? [{ label: "SIPP enrollment", saving: sipp.valuePerUnit, line: `Box qualifies for SIPP but isn't marked certified: enrolling saves $${sipp.valuePerUnit.toFixed(2)} per unit.` }]
