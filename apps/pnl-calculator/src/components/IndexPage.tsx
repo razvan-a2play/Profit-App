@@ -13,7 +13,8 @@ import FloatingCalculationDatabase from './FloatingCalculationDatabase';
 import { UserMenu } from './UserMenu';
 import Link from 'next/link';
 import { LayoutGrid } from 'lucide-react';
-import { FeeScheduleSelect } from '@/lib/fee-schedule';
+import { FeeScheduleSelect, useFeeSchedule } from '@/lib/fee-schedule';
+import { awdFeeRates, awdStorageCost } from '@platform/calc';
 
 import type { Product, AdditionalCost, SavedVersion } from '@/types/product';
 import { useToast } from "@platform/ui";
@@ -30,6 +31,9 @@ const Index: React.FC = () => {
   const [showModeDialog, setShowModeDialog] = useState(false); // Start as false until we check localStorage
   const [isStateLoaded, setIsStateLoaded] = useState(false); // Track if localStorage has been loaded
   const { toast } = useToast();
+  // Amazon's AWD processing and transportation fees for the chosen year.
+  const { schedule: feeSchedule } = useFeeSchedule();
+  const awdRates = awdFeeRates(feeSchedule);
   
   
   const [products, setProducts] = useState<Product[]>([
@@ -566,22 +570,31 @@ const Index: React.FC = () => {
                     />
                   </div>
                   <div>
-                    <Label>AWD Case Receive Cost</Label>
+                    <Label>AWD Processing per box (Amazon, in + out)</Label>
                     <Input
                       type="number"
-                      value={products[0]?.awdCaseReceiveCost || 2.7}
-                      onChange={(e) => setGlobalFee('awdCaseReceiveCost', parseFloat(e.target.value) || 0)}
-                      step="0.01"
+                      value={Math.round(awdRates.processingPerBox * 100) / 100}
+                      readOnly
+                      className="bg-muted"
+                      title={`Amazon ${feeSchedule.label}: ${awdRates.inboundPerBox.toFixed(2)} inbound + ${awdRates.outboundPerBox.toFixed(2)} outbound per box. Set by the "Amazon fees" picker.`}
                     />
                   </div>
                   <div>
-                    <Label>AWD Transportation Cost</Label>
+                    <Label>AWD Transportation per cbf (Amazon)</Label>
                     <Input
                       type="number"
-                      value={products[0]?.awdTransportationCost || 1.15}
-                      onChange={(e) => setGlobalFee('awdTransportationCost', parseFloat(e.target.value) || 0)}
-                      step="0.01"
+                      value={Math.round(awdRates.transportationPerCuft * 10000) / 10000}
+                      readOnly
+                      className="bg-muted"
+                      title={`Amazon ${feeSchedule.label}: ${awdRates.transportationBasePerCuft.toFixed(2)} per cu ft${awdRates.transportationSurchargeRate > 0 ? ` + ${(awdRates.transportationSurchargeRate * 100).toFixed(1)}% fuel and logistics surcharge` : ""}. Set by the "Amazon fees" picker.`}
                     />
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {feeSchedule.label}: ${awdRates.transportationBasePerCuft.toFixed(2)}/cu ft
+                      {awdRates.transportationSurchargeRate > 0
+                        ? ` + ${(awdRates.transportationSurchargeRate * 100).toFixed(1)}% fuel surcharge`
+                        : ""}
+                      {feeSchedule.awd.effectiveFrom ? `, from ${feeSchedule.awd.effectiveFrom}` : ""}
+                    </p>
                   </div>
                 </div>
                 <div className="space-y-4">
@@ -611,6 +624,13 @@ const Index: React.FC = () => {
                       onChange={(e) => setGlobalFee('amazonAWDStorageFee', parseFloat(e.target.value) || 0)}
                       step="0.01"
                     />
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Amazon base: ${feeSchedule.awd.storagePerCuftMonth.otherRegions.toFixed(2)} East/South,
+                      ${feeSchedule.awd.storagePerCuftMonth.westCoast.toFixed(2)} West Coast; smart storage 10% off
+                      {feeSchedule.awd.agedStorage
+                        ? `. From ${feeSchedule.awd.agedStorage.effectiveFrom}, months past ${feeSchedule.awd.agedStorage.afterMonths} cost ${feeSchedule.awd.agedStorage.multiplier}×`
+                        : ""}
+                    </p>
                   </div>
                 </div>
                 <div className="space-y-4">
@@ -625,20 +645,23 @@ const Index: React.FC = () => {
                     />
                   </div>
                   <div>
-                    <Label>AWD Receiving Cost (Calculated)</Label>
+                    <Label>AWD Processing per unit (Calculated)</Label>
                     <Input
                       type="number"
-                      value={(products[0]?.awdCaseReceiveCost || 2.7) * ((products[0]?.length || 0) * (products[0]?.width || 0) * (products[0]?.height || 0) / 1000000 / 35.315) || 0.11}
+                      value={(() => {
+                        const units = products[0]?.masterCartonUnits ?? 0;
+                        return units > 0 ? Math.round((awdRates.processingPerBox / units) * 10000) / 10000 : 0;
+                      })()}
                       readOnly
                       className="bg-muted"
-                      title="Auto-calculated: AWD Case Receive Cost × CBF"
+                      title="Auto-calculated for the first product: AWD processing per box ÷ units per carton"
                     />
                   </div>
                   <div>
                     <Label>AWD Storage Cost (Calculated)</Label>
                     <Input
                       type="number"
-                      value={(products[0]?.storageMonths || 3) * (products[0]?.amazonAWDStorageFee || 0.48) * ((products[0]?.length || 0) * (products[0]?.width || 0) * (products[0]?.height || 0) / 1000000 / 35.315) || 0.09}
+                      value={Math.round(awdStorageCost((products[0]?.length || 0) * (products[0]?.width || 0) * (products[0]?.height || 0) / 1000000 * 35.3147, products[0]?.amazonAWDStorageFee || 0.48, products[0]?.storageMonths || 0, feeSchedule) * 10000) / 10000}
                       readOnly
                       className="bg-muted"
                       title="Auto-calculated: Storage Months × AWD Storage Fee × CBF"

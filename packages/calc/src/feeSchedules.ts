@@ -15,6 +15,30 @@ import type { FbaFeeRow, FeeTableOverride, SizeTier } from "./fbaFees";
 
 export type FeeScheduleId = "us-2026" | "us-2027";
 
+/**
+ * Amazon Warehousing and Distribution (AWD) fees in a schedule's year, base
+ * rate (no smart-storage or Amazon-managed discount). Amazon's AWD dates differ
+ * from FBA's, so they're kept here.
+ */
+export interface AwdRates {
+  /** First day these AWD rates apply, ISO date; null when not known. */
+  effectiveFrom: string | null;
+  /** Charged per box when AWD receives it. */
+  inboundProcessingPerBox: number;
+  /** Charged per box when AWD sends it on to FBA. */
+  outboundProcessingPerBox: number;
+  /** AWD to FBA transportation, per cubic foot, before the fuel surcharge. */
+  transportationPerCuft: number;
+  /** Fuel and logistics surcharge on the transportation fee (0.035 = 3.5%). */
+  transportationSurchargeRate: number;
+  /** Base monthly storage per cubic foot, inventory under 12 months old. */
+  storagePerCuftMonth: { westCoast: number; otherRegions: number };
+  /** Inventory older than `afterMonths` pays `multiplier` × the storage rate. */
+  agedStorage?: { afterMonths: number; multiplier: number; effectiveFrom: string };
+  /** Where the figures came from. Shown in the UI. */
+  source: string;
+}
+
 export interface FeeSchedule {
   id: FeeScheduleId;
   /** "2026 rates" */
@@ -46,6 +70,8 @@ export interface FeeSchedule {
     flat: Readonly<Record<string, number>>;
     overhang: Readonly<Record<string, number>>;
   };
+  /** AWD processing, transportation and storage rates for the same year. */
+  awd: AwdRates;
   /** Where the figures came from, and anything estimated. Shown in the UI. */
   notes: string[];
   /**
@@ -273,6 +299,17 @@ export const US_2026: FeeSchedule = {
     // SIPP discounts: the built-in table (BUILT_IN_SIPP_DISCOUNTS) already
     // matches the 2026 card row for row, so none is set here.
     nonSippPackaging: US_2026_NON_SIPP_PACKAGING,
+  },
+  // Seller Central "Amazon Warehousing and Distribution fees" (GAYG62Q3MPE6STFS),
+  // the table for fees until Jan 31, 2027.
+  awd: {
+    effectiveFrom: null,
+    inboundProcessingPerBox: 1.4,
+    outboundProcessingPerBox: 1.4,
+    transportationPerCuft: 1.4,
+    transportationSurchargeRate: 0,
+    storagePerCuftMonth: { westCoast: 0.57, otherRegions: 0.48 },
+    source: "Amazon's AWD fees until Jan 31, 2027 (Seller Central).",
   },
   notes: [
     "Amazon's 2026 US rate card (effective Jan 15, 2026): all three price columns, non-peak and holiday peak.",
@@ -504,6 +541,20 @@ export const US_2027: FeeSchedule = {
     tierByShippingWeight: true,
     // SIPP discounts unchanged for 2027: BUILT_IN_SIPP_DISCOUNTS still applies.
     nonSippPackaging: US_2027_NON_SIPP_PACKAGING,
+  },
+  // Seller Central "Amazon Warehousing and Distribution fees" (GAYG62Q3MPE6STFS)
+  // and the 2027 fee summary (G201411300).
+  awd: {
+    effectiveFrom: "2027-02-01",
+    inboundProcessingPerBox: 1.55,
+    outboundProcessingPerBox: 1.55,
+    transportationPerCuft: 1.58,
+    // Same rate as the FBA fuel and logistics surcharge, from Feb 1, 2027.
+    transportationSurchargeRate: 0.035,
+    storagePerCuftMonth: { westCoast: 0.57, otherRegions: 0.48 },
+    agedStorage: { afterMonths: 12, multiplier: 2.5, effectiveFrom: "2027-03-01" },
+    source:
+      "Amazon's 2027 AWD fees (Seller Central): from Feb 1, 2027, plus 2.5× storage for inventory over 12 months from Mar 1, 2027.",
   },
   lowPriceExcludedCategories: [
     "automotive and powersports",

@@ -4,6 +4,7 @@ export * from "./dimensionalWeight";
 export * from "./fbaFees";
 export * from "./feeSchedules";
 export * from "./amazonFees";
+export * from "./awdFees";
 export * from "./packagingSavings";
 export * from "./feeAudit";
 export * from "./referralFeeCalculations";
