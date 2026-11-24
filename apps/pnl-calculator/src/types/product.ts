@@ -54,7 +54,12 @@ export interface Product {
   awdTransportationCost: number;
   amazonFBAStorageFeeNonPeak: number;
   amazonFBAStorageFeePeak: number;
+  /** Old free-typed AWD storage rate; the P&L now uses Amazon's table (awdLocation + awdRateTier). */
   amazonAWDStorageFee: number;
+  /** Where AWD receives the stock (sets inbound processing and storage). */
+  awdLocation?: "east-south" | "west-coast" | "wcp-carton" | "wcp-pallet";
+  /** Amazon's AWD rate tier. */
+  awdRateTier?: "base" | "smart" | "managed";
   amazonFBAAVGFee: number;
   // Hazmat Storage Fees
   hazmatStorageFeeNonPeak: number;

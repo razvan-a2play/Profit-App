@@ -15,26 +15,45 @@ import type { FbaFeeRow, FeeTableOverride, SizeTier } from "./fbaFees";
 
 export type FeeScheduleId = "us-2026" | "us-2027";
 
+/** One AWD rate at each of Amazon's three rate tiers. */
+export interface AwdTierRates {
+  /** Base rate. */
+  base: number;
+  /** Smart storage: SKUs moved to FBA by AWD auto-replenishment (10% off storage). */
+  smart: number;
+  /** Amazon managed: Supply Chain by Amazon Managed Service. */
+  managed: number;
+}
+
 /**
- * Amazon Warehousing and Distribution (AWD) fees in a schedule's year, base
- * rate (no smart-storage or Amazon-managed discount). Amazon's AWD dates differ
- * from FBA's, so they're kept here.
+ * Amazon Warehousing and Distribution (AWD) fees in a schedule's year, from
+ * Seller Central's AWD fee table. Amazon's AWD dates differ from FBA's, so
+ * they're kept here.
  */
 export interface AwdRates {
   /** First day these AWD rates apply, ISO date; null when not known. */
   effectiveFrom: string | null;
-  /** Charged per box when AWD receives it. */
+  /** Charged per box when AWD receives it (outside West Coast Palletizable). */
   inboundProcessingPerBox: number;
+  /**
+   * West Coast Palletizable inbound per box: boxes sent in quantities that
+   * build single-SKU pallets (carton), or ready single-SKU pallets (pallet).
+   */
+  westCoastPalletizableInboundPerBox: { carton: number; pallet: number };
   /** Charged per box when AWD sends it on to FBA. */
   outboundProcessingPerBox: number;
   /** AWD to FBA transportation, per cubic foot, before the fuel surcharge. */
-  transportationPerCuft: number;
+  transportationPerCuft: AwdTierRates;
   /** Fuel and logistics surcharge on the transportation fee (0.035 = 3.5%). */
   transportationSurchargeRate: number;
-  /** Base monthly storage per cubic foot, inventory under 12 months old. */
-  storagePerCuftMonth: { westCoast: number; otherRegions: number };
-  /** Inventory older than `afterMonths` pays `multiplier` × the storage rate. */
-  agedStorage?: { afterMonths: number; multiplier: number; effectiveFrom: string };
+  /** Monthly storage per cubic foot, inventory under 12 months old. */
+  storagePerCuftMonth: { westCoast: AwdTierRates; otherRegions: AwdTierRates };
+  /** Monthly storage per cubic foot for inventory older than `afterMonths`. */
+  agedStorage?: {
+    afterMonths: number;
+    effectiveFrom: string;
+    perCuftMonth: { westCoast: AwdTierRates; otherRegions: AwdTierRates };
+  };
   /** Where the figures came from. Shown in the UI. */
   source: string;
 }
@@ -305,10 +324,15 @@ export const US_2026: FeeSchedule = {
   awd: {
     effectiveFrom: null,
     inboundProcessingPerBox: 1.4,
+    // $1.40 less Amazon's $0.35 promotional discount.
+    westCoastPalletizableInboundPerBox: { carton: 1.05, pallet: 1.05 },
     outboundProcessingPerBox: 1.4,
-    transportationPerCuft: 1.4,
+    transportationPerCuft: { base: 1.4, smart: 1.4, managed: 1.26 },
     transportationSurchargeRate: 0,
-    storagePerCuftMonth: { westCoast: 0.57, otherRegions: 0.48 },
+    storagePerCuftMonth: {
+      westCoast: { base: 0.57, smart: 0.51, managed: 0.46 },
+      otherRegions: { base: 0.48, smart: 0.43, managed: 0.38 },
+    },
     source: "Amazon's AWD fees until Jan 31, 2027 (Seller Central).",
   },
   notes: [
@@ -547,14 +571,29 @@ export const US_2027: FeeSchedule = {
   awd: {
     effectiveFrom: "2027-02-01",
     inboundProcessingPerBox: 1.55,
+    // $1.55 less Amazon's promotional discount: $0.39 (carton), $0.62 (pallet).
+    // Amazon offers it for shipments received through Dec 31, 2027.
+    westCoastPalletizableInboundPerBox: { carton: 1.16, pallet: 0.93 },
     outboundProcessingPerBox: 1.55,
-    transportationPerCuft: 1.58,
+    // Amazon managed loses its transportation discount in 2027.
+    transportationPerCuft: { base: 1.58, smart: 1.58, managed: 1.58 },
     // Same rate as the FBA fuel and logistics surcharge, from Feb 1, 2027.
     transportationSurchargeRate: 0.035,
-    storagePerCuftMonth: { westCoast: 0.57, otherRegions: 0.48 },
-    agedStorage: { afterMonths: 12, multiplier: 2.5, effectiveFrom: "2027-03-01" },
+    storagePerCuftMonth: {
+      westCoast: { base: 0.57, smart: 0.51, managed: 0.46 },
+      otherRegions: { base: 0.48, smart: 0.43, managed: 0.38 },
+    },
+    // 2.5 times the standard rate, tier discounts on top (Amazon's table).
+    agedStorage: {
+      afterMonths: 12,
+      effectiveFrom: "2027-03-01",
+      perCuftMonth: {
+        westCoast: { base: 1.43, smart: 1.28, managed: 1.14 },
+        otherRegions: { base: 1.2, smart: 1.08, managed: 0.96 },
+      },
+    },
     source:
-      "Amazon's 2027 AWD fees (Seller Central): from Feb 1, 2027, plus 2.5× storage for inventory over 12 months from Mar 1, 2027.",
+      "Amazon's 2027 AWD fees (Seller Central): from Feb 1, 2027; storage for inventory over 12 months from Mar 1, 2027.",
   },
   lowPriceExcludedCategories: [
     "automotive and powersports",

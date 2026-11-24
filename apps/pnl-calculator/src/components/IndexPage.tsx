@@ -14,7 +14,8 @@ import { UserMenu } from './UserMenu';
 import Link from 'next/link';
 import { LayoutGrid } from 'lucide-react';
 import { FeeScheduleSelect, useFeeSchedule } from '@/lib/fee-schedule';
-import { awdFeeRates, awdStorageCost } from '@platform/calc';
+import { awdFeeRates, awdStorageCost, AWD_LOCATION_LABEL, AWD_TIER_LABEL, type AwdLocation, type AwdRateTier } from '@platform/calc';
+import { awdSetupOf } from '@/lib/awd-setup';
 
 import type { Product, AdditionalCost, SavedVersion } from '@/types/product';
 import { useToast } from "@platform/ui";
@@ -31,9 +32,9 @@ const Index: React.FC = () => {
   const [showModeDialog, setShowModeDialog] = useState(false); // Start as false until we check localStorage
   const [isStateLoaded, setIsStateLoaded] = useState(false); // Track if localStorage has been loaded
   const { toast } = useToast();
-  // Amazon's AWD processing and transportation fees for the chosen year.
+  // Amazon's AWD fees for the chosen year, where AWD receives the stock and
+  // at the seller's rate tier (set below, applied to every product).
   const { schedule: feeSchedule } = useFeeSchedule();
-  const awdRates = awdFeeRates(feeSchedule);
   
   
   const [products, setProducts] = useState<Product[]>([
@@ -110,6 +111,8 @@ const Index: React.FC = () => {
       containsBatteries: false,
     }
   ]);
+  const awdSetup = awdSetupOf(products[0]);
+  const awdRates = awdFeeRates(feeSchedule, awdSetup);
   // Persist and restore app state to avoid data loss on tab switches/reloads
   const STATE_STORAGE_KEY = 'pl_calculator_state_v1';
 
@@ -251,6 +254,8 @@ const Index: React.FC = () => {
         amazonFBAStorageFeeNonPeak: seed?.amazonFBAStorageFeeNonPeak || 0.78,
         amazonFBAStorageFeePeak: seed?.amazonFBAStorageFeePeak || 2.4,
         amazonAWDStorageFee: seed?.amazonAWDStorageFee || 0.48,
+        awdLocation: seed?.awdLocation,
+        awdRateTier: seed?.awdRateTier,
         amazonFBAAVGFee: seed?.amazonFBAAVGFee || 1.185,
         hazmatStorageFeeNonPeak: seed?.hazmatStorageFeeNonPeak || 0.99,
         hazmatStorageFeePeak: seed?.hazmatStorageFeePeak || 3.63,
@@ -570,14 +575,58 @@ const Index: React.FC = () => {
                     />
                   </div>
                   <div>
+                    <Label>AWD location</Label>
+                    <Select
+                      value={awdSetup.location}
+                      onValueChange={(v) => setGlobalFee('awdLocation', v as AwdLocation)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {(Object.keys(AWD_LOCATION_LABEL) as AwdLocation[]).map((loc) => (
+                          <SelectItem key={loc} value={loc}>
+                            {AWD_LOCATION_LABEL[loc]}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Sets the inbound processing fee and the storage rate. West Coast Palletizable &quot;boxes&quot; = boxes
+                      sent in enough quantity to build single-SKU pallets; &quot;pallets&quot; = ready single-SKU pallets, no
+                      loose boxes.
+                    </p>
+                  </div>
+                  <div>
+                    <Label>AWD rate tier</Label>
+                    <Select
+                      value={awdSetup.tier}
+                      onValueChange={(v) => setGlobalFee('awdRateTier', v as AwdRateTier)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {(Object.keys(AWD_TIER_LABEL) as AwdRateTier[]).map((tier) => (
+                          <SelectItem key={tier} value={tier}>
+                            {AWD_TIER_LABEL[tier]}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
                     <Label>AWD Processing per box (Amazon, in + out)</Label>
                     <Input
                       type="number"
                       value={Math.round(awdRates.processingPerBox * 100) / 100}
                       readOnly
                       className="bg-muted"
-                      title={`Amazon ${feeSchedule.label}: ${awdRates.inboundPerBox.toFixed(2)} inbound + ${awdRates.outboundPerBox.toFixed(2)} outbound per box. Set by the "Amazon fees" picker.`}
+                      title={`Amazon ${feeSchedule.label}, ${AWD_LOCATION_LABEL[awdSetup.location]}: $${awdRates.inboundPerBox.toFixed(2)} inbound + $${awdRates.outboundPerBox.toFixed(2)} outbound per box.`}
                     />
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      ${awdRates.inboundPerBox.toFixed(2)} in + ${awdRates.outboundPerBox.toFixed(2)} out
+                    </p>
                   </div>
                   <div>
                     <Label>AWD Transportation per cbf (Amazon)</Label>
@@ -586,7 +635,7 @@ const Index: React.FC = () => {
                       value={Math.round(awdRates.transportationPerCuft * 10000) / 10000}
                       readOnly
                       className="bg-muted"
-                      title={`Amazon ${feeSchedule.label}: ${awdRates.transportationBasePerCuft.toFixed(2)} per cu ft${awdRates.transportationSurchargeRate > 0 ? ` + ${(awdRates.transportationSurchargeRate * 100).toFixed(1)}% fuel and logistics surcharge` : ""}. Set by the "Amazon fees" picker.`}
+                      title={`Amazon ${feeSchedule.label}: $${awdRates.transportationBasePerCuft.toFixed(2)} per cu ft${awdRates.transportationSurchargeRate > 0 ? ` + ${(awdRates.transportationSurchargeRate * 100).toFixed(1)}% fuel and logistics surcharge` : ""}. Set by the "Amazon fees" picker.`}
                     />
                     <p className="mt-1 text-xs text-muted-foreground">
                       {feeSchedule.label}: ${awdRates.transportationBasePerCuft.toFixed(2)}/cu ft
@@ -617,18 +666,19 @@ const Index: React.FC = () => {
                     />
                   </div>
                   <div>
-                    <Label>Amazon AWD Storage Fee (per cbf)</Label>
+                    <Label>Amazon AWD Storage Fee (per cbf per month)</Label>
                     <Input
                       type="number"
-                      value={products[0]?.amazonAWDStorageFee || 0.48}
-                      onChange={(e) => setGlobalFee('amazonAWDStorageFee', parseFloat(e.target.value) || 0)}
-                      step="0.01"
+                      value={awdRates.storagePerCuftMonth}
+                      readOnly
+                      className="bg-muted"
+                      title={`Amazon ${feeSchedule.label}: ${AWD_LOCATION_LABEL[awdSetup.location]}, ${AWD_TIER_LABEL[awdSetup.tier]}. Set by AWD location and rate tier.`}
                     />
                     <p className="mt-1 text-xs text-muted-foreground">
-                      Amazon base: ${feeSchedule.awd.storagePerCuftMonth.otherRegions.toFixed(2)} East/South,
-                      ${feeSchedule.awd.storagePerCuftMonth.westCoast.toFixed(2)} West Coast; smart storage 10% off
-                      {feeSchedule.awd.agedStorage
-                        ? `. From ${feeSchedule.awd.agedStorage.effectiveFrom}, months past ${feeSchedule.awd.agedStorage.afterMonths} cost ${feeSchedule.awd.agedStorage.multiplier}×`
+                      {awdSetup.location === 'east-south' ? 'East Coast / South' : 'West Coast'} rate, inventory under{" "}
+                      {awdRates.agedAfterMonths ?? 12} months
+                      {awdRates.agedStoragePerCuftMonth !== null && feeSchedule.awd.agedStorage
+                        ? `; older: $${awdRates.agedStoragePerCuftMonth.toFixed(2)} from ${feeSchedule.awd.agedStorage.effectiveFrom}`
                         : ""}
                     </p>
                   </div>
@@ -661,7 +711,7 @@ const Index: React.FC = () => {
                     <Label>AWD Storage Cost (Calculated)</Label>
                     <Input
                       type="number"
-                      value={Math.round(awdStorageCost((products[0]?.length || 0) * (products[0]?.width || 0) * (products[0]?.height || 0) / 1000000 * 35.3147, products[0]?.amazonAWDStorageFee || 0.48, products[0]?.storageMonths || 0, feeSchedule) * 10000) / 10000}
+                      value={Math.round(awdStorageCost((products[0]?.length || 0) * (products[0]?.width || 0) * (products[0]?.height || 0) / 1000000 * 35.3147, products[0]?.storageMonths || 0, feeSchedule, awdSetup) * 10000) / 10000}
                       readOnly
                       className="bg-muted"
                       title="Auto-calculated: Storage Months × AWD Storage Fee × CBF"

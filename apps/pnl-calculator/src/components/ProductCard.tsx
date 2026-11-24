@@ -33,7 +33,8 @@ import TikTokFBTCalculation from './TikTokFBTCalculation';
 import MarketingCalculation from './MarketingCalculation';
 import DimensionalCalculations from './DimensionalCalculations';
 import { optimizeCarton } from "@platform/calc";
-import { calculateStorageMetrics, awdFeeRates, awdStorageCost } from "@platform/calc";
+import { calculateStorageMetrics, awdFeeRates, awdStorageCost, AWD_LOCATION_LABEL, AWD_TIER_LABEL } from "@platform/calc";
+import { awdSetupOf } from "@/lib/awd-setup";
 import { calculateCBMPerUnit, getCBMPerUnit, getCBFPerUnit } from "@platform/calc";
 import { calculateShippingCosts, calculateShippingByStrategy } from "@platform/calc";
 import { calculateDimensionalWeight } from "@platform/calc";
@@ -258,10 +259,12 @@ const ProductCard = memo<ProductCardProps>(({
   // battery, peak weighting) shared by the fees card, the P&L total and the
   // returns cost, priced with the fee schedule picked in the header.
   const { schedule: feeSchedule } = useFeeSchedule();
-  // Amazon's AWD processing (in + out, per box) and transportation (per cu ft,
-  // fuel surcharge included) for the chosen year. Amazon sets these, so the
-  // old per-product AWD inputs are no longer used.
-  const awdRates = useMemo(() => awdFeeRates(feeSchedule), [feeSchedule]);
+  // Amazon's AWD processing (in + out, per box), transportation (per cu ft,
+  // fuel surcharge included) and storage for the chosen year, where AWD
+  // receives the stock and at the seller's rate tier. Amazon sets these, so
+  // the old per-product AWD fee inputs are no longer used.
+  const awdSetup = useMemo(() => awdSetupOf(product), [product.awdLocation, product.awdRateTier]);
+  const awdRates = useMemo(() => awdFeeRates(feeSchedule, awdSetup), [feeSchedule, awdSetup]);
   const feeInput = useMemo(() => ({
     length: product.length ?? 0,
     width: product.width ?? 0,
@@ -329,11 +332,11 @@ const ProductCard = memo<ProductCardProps>(({
       shippingToAWD: product.shippingToAWD,
       awdCaseReceiveCost: awdRates.processingPerBox,
       awdTransportationCost: awdRates.transportationPerCuft,
-      amazonAWDStorageFee: product.amazonAWDStorageFee,
+      amazonAWDStorageFee: awdRates.storagePerCuftMonth,
       storageMonths: product.storageMonths,
       calculatorMode
     });
-  }, [product.length, product.width, product.height, product.weight, product.masterCartonLength, product.masterCartonWidth, product.masterCartonHeight, product.masterCartonUnits, product.cbmCost, product.shippingToAWD, awdRates.processingPerBox, awdRates.transportationPerCuft, product.amazonAWDStorageFee, product.storageMonths, calculatorMode]);
+  }, [product.length, product.width, product.height, product.weight, product.masterCartonLength, product.masterCartonWidth, product.masterCartonHeight, product.masterCartonUnits, product.cbmCost, product.shippingToAWD, awdRates.processingPerBox, awdRates.transportationPerCuft, awdRates.storagePerCuftMonth, product.storageMonths, calculatorMode]);
 
   // Extract CBM values for backward compatibility
   const memoizedCBMResult = {
@@ -351,13 +354,13 @@ const ProductCard = memo<ProductCardProps>(({
     return {
       shippingToAMZ: cbmPerUnit * (product.cbmCost || 0),
       awdReceivingCost: units > 0 ? (awdRates.processingPerBox || 0) / units : 0,
-      storageAWDCost: awdStorageCost(cbfPerUnit, product.amazonAWDStorageFee || 0, product.storageMonths || 0, feeSchedule),
+      storageAWDCost: awdStorageCost(cbfPerUnit, product.storageMonths || 0, feeSchedule, awdSetup),
     };
   }, [
     memoizedShippingCalculation,
     product.cbmCost,
     awdRates.processingPerBox,
-    product.amazonAWDStorageFee,
+    awdSetup,
     product.storageMonths,
     feeSchedule,
   ]);
@@ -400,14 +403,13 @@ const ProductCard = memo<ProductCardProps>(({
       cbfPerUnit,  
       amazonFBAAVGFee,
       storageMonths: product.storageMonths,
-      amazonAWDStorageFee: product.amazonAWDStorageFee,
-      schedule: feeSchedule,
+      awd: { schedule: feeSchedule, setup: awdSetup },
       storageDays: 30,
       length: product.length,
       width: product.width,
       height: product.height
     });
-  }, [memoizedShippingCalculation, product.amazonFBAStorageFeeNonPeak, product.amazonFBAStorageFeePeak, product.storageMonths, product.amazonAWDStorageFee, feeSchedule, product.length, product.width, product.height, product.hazmat, product.hazmatStorageFeeNonPeak, product.hazmatStorageFeePeak, product.hazmatOversizeStorageFeeNonPeak, product.hazmatOversizeStorageFeePeak]);
+  }, [memoizedShippingCalculation, product.amazonFBAStorageFeeNonPeak, product.amazonFBAStorageFeePeak, product.storageMonths, awdSetup, feeSchedule, product.length, product.width, product.height, product.hazmat, product.hazmatStorageFeeNonPeak, product.hazmatStorageFeePeak, product.hazmatOversizeStorageFeeNonPeak, product.hazmatOversizeStorageFeePeak]);
 
   // Calculate regular (non-hazmat) storage for comparison when hazmat is enabled
   const regularStorageMetrics = useMemo(() => {
@@ -420,14 +422,13 @@ const ProductCard = memo<ProductCardProps>(({
       cbfPerUnit,
       amazonFBAAVGFee: regularAVGFee,
       storageMonths: product.storageMonths,
-      amazonAWDStorageFee: product.amazonAWDStorageFee,
-      schedule: feeSchedule,
+      awd: { schedule: feeSchedule, setup: awdSetup },
       storageDays: 30,
       length: product.length,
       width: product.width,
       height: product.height
     });
-  }, [memoizedShippingCalculation, product.amazonFBAStorageFeeNonPeak, product.amazonFBAStorageFeePeak, product.storageMonths, product.amazonAWDStorageFee, feeSchedule, product.length, product.width, product.height, product.hazmat]);
+  }, [memoizedShippingCalculation, product.amazonFBAStorageFeeNonPeak, product.amazonFBAStorageFeePeak, product.storageMonths, awdSetup, feeSchedule, product.length, product.width, product.height, product.hazmat]);
 
   // Calculate hazmat-aware AVG fee for use in MCF and other calculations
   const hazmatAwareAVGFee = useMemo(() => {
@@ -740,8 +741,7 @@ const ProductCard = memo<ProductCardProps>(({
       cbfPerUnit,
       amazonFBAAVGFee,
       storageMonths: product.storageMonths,
-      amazonAWDStorageFee: product.amazonAWDStorageFee,
-      schedule: feeSchedule
+      awd: { schedule: feeSchedule, setup: awdSetup }
     });
     const storageFBACost = storageResults.storageFBA;
     const storageAWDCost = storageResults.storageAWD;
@@ -861,8 +861,7 @@ const ProductCard = memo<ProductCardProps>(({
             cbfPerUnit,
             amazonFBAAVGFee,
             storageMonths: product.storageMonths,
-            amazonAWDStorageFee: product.amazonAWDStorageFee,
-            schedule: feeSchedule
+            awd: { schedule: feeSchedule, setup: awdSetup }
           });
           
           const storageFBACost = storageResults.storageFBA;
@@ -1979,7 +1978,7 @@ const ProductCard = memo<ProductCardProps>(({
             cbmCost={product.cbmCost}
             shippingToAWD={product.shippingToAWD}
             awdCaseReceiveCost={awdRates.processingPerBox}
-            amazonAWDStorageFee={product.amazonAWDStorageFee}
+            amazonAWDStorageFee={awdRates.storagePerCuftMonth}
             storageMonths={product.storageMonths}
             onMCFFeeChange={setMcfFee}
             onStorageFeeChange={setMcfStorageFee}
@@ -2014,7 +2013,7 @@ const ProductCard = memo<ProductCardProps>(({
                 cbmCost={product.cbmCost}
                 shippingToAWD={product.shippingToAWD}
                 awdCaseReceiveCost={awdRates.processingPerBox}
-                amazonAWDStorageFee={product.amazonAWDStorageFee}
+                amazonAWDStorageFee={awdRates.storagePerCuftMonth}
                 storageMonths={product.storageMonths}
                 onMCFFeeChange={setMcfFeeShopify}
                 onStorageFeeChange={setMcfStorageFeeShopify}
@@ -3079,8 +3078,8 @@ const ProductCard = memo<ProductCardProps>(({
                         <p><strong>Cost Components:</strong></p>
                         <p>• Shipping to AMZ = CBM per unit × CBM cost</p>
                         <p>• FBA Storage = CBF per unit × FBA rate × months</p>
-                        <p>• AWD processing = Amazon&apos;s inbound + outbound fee per box ÷ units per carton ({feeSchedule.label}: ${awdRates.inboundPerBox.toFixed(2)} + ${awdRates.outboundPerBox.toFixed(2)})</p>
-                        <p>• AWD Storage = CBF per unit × your AWD rate × months{feeSchedule.awd.agedStorage ? `; months past ${feeSchedule.awd.agedStorage.afterMonths} cost ${feeSchedule.awd.agedStorage.multiplier}×` : ""}</p>
+                        <p>• AWD processing = Amazon&apos;s inbound + outbound fee per box ÷ units per carton ({feeSchedule.label}, {AWD_LOCATION_LABEL[awdSetup.location]}: ${awdRates.inboundPerBox.toFixed(2)} + ${awdRates.outboundPerBox.toFixed(2)})</p>
+                        <p>• AWD Storage = CBF per unit × Amazon&apos;s AWD storage rate × months (${awdRates.storagePerCuftMonth.toFixed(2)}/cu ft, {AWD_TIER_LABEL[awdSetup.tier]}{awdRates.agedStoragePerCuftMonth !== null ? `; months past ${awdRates.agedAfterMonths} at $${awdRates.agedStoragePerCuftMonth.toFixed(2)}` : ""})</p>
                         <p>• Transfer AWD→FBA = CBF per unit × Amazon&apos;s transportation fee (${awdRates.transportationBasePerCuft.toFixed(2)}/cu ft{awdRates.transportationSurchargeRate > 0 ? ` + ${(awdRates.transportationSurchargeRate * 100).toFixed(1)}% fuel surcharge` : ""})</p>
                         <p><strong>Fulfillment Mix:</strong></p>
                         <p>• 100% FBA: AMZ shipping + FBA storage only</p>
@@ -3227,7 +3226,7 @@ const ProductCard = memo<ProductCardProps>(({
                     const storageFBACost = product.storageMonths * amazonFBAAVGFee * cbfPerUnit;
                     
                     // Storage AWD calculation  
-                    const storageAWDCost = awdStorageCost(cbfPerUnit, product.amazonAWDStorageFee || 0, product.storageMonths, feeSchedule);
+                    const storageAWDCost = awdStorageCost(cbfPerUnit, product.storageMonths, feeSchedule, awdSetup);
                     
                     return (
                       <>
@@ -3249,7 +3248,7 @@ const ProductCard = memo<ProductCardProps>(({
                         <div className="grid grid-cols-3 gap-4 items-center">
                           <div className="text-sm font-medium text-card-foreground flex items-center">
                             AWD processing (in + out)
-                            <div className="ml-1 cursor-help" title={`Amazon ${feeSchedule.label}: ${awdRates.inboundPerBox.toFixed(2)} inbound + ${awdRates.outboundPerBox.toFixed(2)} outbound per box = ${awdRates.processingPerBox.toFixed(2)}${units > 0 ? ` ÷ ${units} units per carton` : ""}`}>
+                            <div className="ml-1 cursor-help" title={`Amazon ${feeSchedule.label}, ${AWD_LOCATION_LABEL[awdSetup.location]}: $${awdRates.inboundPerBox.toFixed(2)} inbound + $${awdRates.outboundPerBox.toFixed(2)} outbound per box = $${awdRates.processingPerBox.toFixed(2)}${units > 0 ? ` ÷ ${units} units per carton` : ""}`}>
                               <Info className="w-4 h-4 text-muted-foreground" />
                             </div>
                           </div>
@@ -3259,7 +3258,7 @@ const ProductCard = memo<ProductCardProps>(({
                         <div className="grid grid-cols-3 gap-4 items-center">
                           <div className="text-sm font-medium text-card-foreground flex items-center">
                             Transfer AWD to FBA cost
-                            <div className="ml-1 cursor-help" title={`Amazon ${feeSchedule.label}: ${awdRates.transportationBasePerCuft.toFixed(2)} per cu ft${awdRates.transportationSurchargeRate > 0 ? ` + ${(awdRates.transportationSurchargeRate * 100).toFixed(1)}% fuel and logistics surcharge = ${awdRates.transportationPerCuft.toFixed(4)}` : ""} × ${cbfPerUnit.toFixed(4)} cu ft per unit`}>
+                            <div className="ml-1 cursor-help" title={`Amazon ${feeSchedule.label}: $${awdRates.transportationBasePerCuft.toFixed(2)} per cu ft${awdRates.transportationSurchargeRate > 0 ? ` + ${(awdRates.transportationSurchargeRate * 100).toFixed(1)}% fuel and logistics surcharge = $${awdRates.transportationPerCuft.toFixed(4)}` : ""} × ${cbfPerUnit.toFixed(4)} cu ft per unit`}>
                               <Info className="w-4 h-4 text-muted-foreground" />
                             </div>
                           </div>

@@ -1,14 +1,14 @@
-import { awdStorageCost } from "./awdFees";
+import { awdStorageCost, type AwdSetup } from "./awdFees";
 import type { FeeSchedule } from "./feeSchedules";
 
 interface StorageMetricsParams {
   cbfPerUnit: number;
   amazonFBAAVGFee: number;
   storageMonths: number;
-  /** AWD storage per cubic foot per month; $0.48 (Amazon's East base rate) when not given. */
+  /** AWD storage per cubic foot per month, used when `awd` isn't given; default $0.48. */
   amazonAWDStorageFee?: number;
-  /** Applies the schedule's aged-inventory AWD rate past 12 months. */
-  schedule?: FeeSchedule;
+  /** AWD storage from Amazon's table for this location and tier (aged rate included). */
+  awd?: { schedule: FeeSchedule; setup: AwdSetup };
   storageDays?: number;
   length?: number;
   width?: number;
@@ -31,7 +31,7 @@ export const calculateStorageMetrics = (params: StorageMetricsParams) => {
     amazonFBAAVGFee,
     storageMonths,
     amazonAWDStorageFee = 0.48,
-    schedule,
+    awd,
     storageDays = 30,
     length,
     width,
@@ -39,8 +39,8 @@ export const calculateStorageMetrics = (params: StorageMetricsParams) => {
   } = params;
 
   const storageFBA = cbfPerUnit * amazonFBAAVGFee * storageMonths;
-  const storageAWD = schedule
-    ? awdStorageCost(cbfPerUnit, amazonAWDStorageFee, storageMonths, schedule)
+  const storageAWD = awd
+    ? awdStorageCost(cbfPerUnit, storageMonths, awd.schedule, awd.setup)
     : cbfPerUnit * amazonAWDStorageFee * storageMonths;
   
   // Calculate 3PL storage fee with time-period based pricing
